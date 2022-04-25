@@ -1,2 +1,2 @@
-# tech_demos
+# tech demos
 Simple demos of various technology
