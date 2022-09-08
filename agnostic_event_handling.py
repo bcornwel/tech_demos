@@ -531,7 +531,7 @@ class Engine:
         sent = False
         for i, d in enumerate(event[Const.Event.Targets]):
             if d['addr'] == [self.handle.addr, self.handle.port]:
-                event[Const.Event.Targets].pop(i)
+                event[Const.Event.Targets].pop(i)  # TODO: this should be better. Perhaps creating a new event with external targets only
                 break
         if len(event[Const.Event.Targets]):
             for target in event[Const.Event.Targets]:
