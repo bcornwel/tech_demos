@@ -5,7 +5,7 @@ import json
 import time
 import inspect
 import functools
-from typing import Any
+from typing import Any, Callable
 import jsonschema
 
 
@@ -219,7 +219,7 @@ class Schemas:
 
 FlowRegistry = {}
  
-def register_step(name: str) -> function:
+def register_step(name: str) -> Callable:
     """
     Registers a 'test' step in the FlowRegistry dict
 
@@ -233,7 +233,7 @@ def register_step(name: str) -> function:
     return register
 
 
-def debug_decorator(func: function) -> function:
+def debug_decorator(func: Callable) -> Callable:
     """
     Decorates functions with debug prints and timing functionality (if enabled in the GlobalTriggers class)
 
@@ -278,7 +278,7 @@ def debug_decorator(func: function) -> function:
     return wrapper
 
 
-def decorate_all_methods(decorator: function) -> function:
+def decorate_all_methods(decorator: Callable) -> Callable:
     """
     Decorates all the methods in a class (includes static methods)
 
@@ -374,6 +374,14 @@ def example_step3():
     print("This is the third example step")
 
 
+SpecificEventMap = {
+    "example_step1": example_step1,
+    "example_step2": example_step2,
+    "example_step3": example_step3,
+    "test function 3": print
+}
+
+
 class TestClass:
     def __init__(self, name="Test class", message="Test message"):
         self.name = name
@@ -422,12 +430,12 @@ class Event(dict):
 
 @decorate_all_methods(debug_decorator)
 class Engine:
-    def __init__(self, name: str = None, addr: str = None, port: int = None, peers: list = None):
+    def __init__(self, name: str = None, addr: str = None, port: int = None, peers: list = None, event_mapping: dict = None):
         self.name = name if name else Const.Engine.Generic
         self.handle = EngineHandle(addr if addr else Engine.resolve_ip(), port if port else Const.Engine.DefaultPort)
         self.peers = dict()
         self.add_peers(peers)
-        self.event_map = {"test function 3": print}  # this is the agnostic functionality for running functions based on messages
+        self.event_map = event_mapping if event_mapping else {"test function 3": print}  # this is the agnostic functionality for running functions based on messages
 
     def add_peers(self, peers: list or tuple or None) -> None:
         """
@@ -483,7 +491,7 @@ class Engine:
                             func()
                         handled = True
                     except Exception as dynamic_function_exception:
-                        print(f"Unable to run function '{target[Const.Event.Data][Const.Event.Value]}': {dynamic_function_exception}")
+                        print(f"Unable to run function '{target[Const.Event.Data][Const.Event.Value]}': '{dynamic_function_exception}'")
                 else:
                     if target[Const.Event.Data][Const.Event.Type] == Const.Event.Primitive:
                         data = target[Const.Event.Data][Const.Event.Value]
@@ -516,6 +524,9 @@ class Engine:
         """
         for k, v in sorted(FlowRegistry.items()):
             print(f"Result of {k} is {v()}")
+
+    def breakpoint(self):
+        breakpoint()
 
     def forward_to_peer(self, event: Event) -> bool:
         """
@@ -556,8 +567,8 @@ class Engine:
 if __name__ == "__main__":
     engine_1_addr = (Engine.resolve_ip(), Const.Engine.DefaultPort)
     engine_2_addr = (Const.Engine.DefaultIP, Const.Engine.DefaultPort+1)
-    test_engine_1 = Engine("Test Engine 1", engine_1_addr[0], engine_1_addr[1])
-    test_engine_2 = Engine("Test Engine 2", engine_2_addr[0], engine_2_addr[1], peers={engine_1_addr: test_engine_1})
+    test_engine_1 = Engine("Test Engine 1", engine_1_addr[0], engine_1_addr[1], event_mapping=SpecificEventMap)
+    test_engine_2 = Engine("Test Engine 2", engine_2_addr[0], engine_2_addr[1], peers={engine_1_addr: test_engine_1}, event_mapping=SpecificEventMap)
     test_engine_1.add_peers({engine_2_addr: test_engine_2})
     print("Created engine")
 
@@ -584,5 +595,11 @@ if __name__ == "__main__":
                             {Const.Event.Addr: engine_1_addr, Const.Event.Data: {Const.Event.Type: Const.Event.Function, Const.Event.Value: "example_flow"}},
                             ])
     test_engine_1.handle_event(test_event_4)
+
+    test_event_5 = Event(event_id="000005_0_0_0_12345678", message=("test function 5", "high"), source=engine_2_addr, 
+                         targets=[
+                            {Const.Event.Addr: engine_1_addr, Const.Event.Data: {Const.Event.Type: Const.Event.Function, Const.Event.Value: "breakpoint"}},
+                            ])
+    test_engine_1.handle_event(test_event_5)
     
     print("Finished processing events")
