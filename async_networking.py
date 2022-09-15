@@ -4,7 +4,12 @@ This file is an example of asynchronous networking using the asyncio library
 
 import asyncio, inspect, aiohttp
 from aiohttp import web
-from tabnanny import check
+import logging
+
+
+logging.basicConfig(filename="test.log", level=logging.INFO)
+logger = logging.getLogger('test_log')
+logger.info("async networking")
 
 
 class tasks():
@@ -234,24 +239,10 @@ class website():
         await n.stop_server()
 
 
-def convert_to_win_path(default_repos_path):
-    import re, os
-    if "ive_mgr_001" in default_repos_path:
-        re.sub(".+nfs.+sc.+disks", "\\\\\\\\sccfsv07a-cifs.sc.intel.com", default_repos_path)
-        default_repos_path = os.path.normpath(default_repos_path)
-    else:
-        default_repos_path = re.sub(".+nfs.+sc.+disks", "\\\\\\\\sccfsv05a-cifs.sc.intel.com", default_repos_path)
-        default_repos_path = os.path.normpath(default_repos_path)
-    return default_repos_path
-
-
 if __name__ == "__main__":
-    d = convert_to_win_path("\\nfs\\sc\\disks\\ive_mgr_nx_002\\MARS-VV\\seed_repos\\golden\\rig__example_rig_msg")
-    import os
-    print("\n".join(os.listdir(d)))
     t = tasks
     # asyncio.run(t.run())
-    n = networking
+    #n = networking
     # asyncio.run(n.run())
     w = website
-    # asyncio.run(w.run())
+    asyncio.run(w.run())

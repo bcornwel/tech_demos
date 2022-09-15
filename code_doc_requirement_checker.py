@@ -16,7 +16,7 @@ def should_doc(text, name, i, n, is_class):
         if '"""' not in text[n+1]:
             if is_class and i-n > 20:  # does not start with a docstring
                 print(f"\tclass {name} needs docstring because it's {i-n} lines long")
-            elif i-n > doc_threshold:
+            elif i-n > func_doc_threshold:
                 print(f"\tfunction {name} needs docstring because it's {i-n} lines long")
 
 def walk(d):

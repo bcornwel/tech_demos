@@ -5,9 +5,17 @@ import json
 import time
 import inspect
 import functools
+import logging
 from typing import Any, Callable
 import jsonschema
+import async_networking
+import asyncio
 
+
+logging.basicConfig(filename="test2.log", level=logging.INFO)
+logger = logging.getLogger('agnostic')
+logger.info("agnostic event handling")
+asyncio.run(async_networking.tasks().run())
 
 class SchemaValidationError(Exception):
     pass
@@ -18,8 +26,8 @@ class NonExistantFunction(Exception):
 
 
 class GlobalTriggers:
-    FunctionPrinting = False
-    Timing = False
+    FunctionPrinting = True
+    Timing = True
 
 
 class Const:

@@ -53,7 +53,14 @@ class StateManager:
 
     def should_cleanup(self):
         return self.state == StateDef.Stopping
+    
+    def set_state(self, state):
+        self.state = state
 
+
+class Command:
+    def __init__(self, state):
+        self.state = state
 
 class CentralizedLogger:
     def __init__(self, global_state):
@@ -94,6 +101,9 @@ def work_process(s, l, q, o=None):
                 obj = q.get()
                 if isinstance(obj, str):
                     l.print(obj)
+                elif isinstance(obj, Command):
+                    print("Setting worker state")
+                    s.set_state(obj.state)
                 else:
                     obj.do_something(l)
             else:
@@ -107,6 +117,7 @@ def work_process(s, l, q, o=None):
         timeout -= 1
         time.sleep(0.5)
 
+
 def management_process(s, l, q, o1, o2):
     print("Manager starting")
     timeout = global_timeout
@@ -114,6 +125,9 @@ def management_process(s, l, q, o1, o2):
         try:
             if not q.empty():
                 obj = q.get()
+                if isinstance(obj, Command):
+                    print("Setting management state")
+                    s.set_state(obj.state)
                 if "bored" in obj:
                     if "Process-1" in obj:
                         o1.put(EventClass(f'task {random.random()}'))
@@ -175,6 +189,10 @@ if __name__ == "__main__":
     time.sleep(10)
     state.stopping()
     print("Stopping")
+    in_queue1.put(Command(StateDef.Stopping))
+    in_queue2.put(Command(StateDef.Stopping))
+    out_queue.put(Command(StateDef.Stopping))
+    time.sleep(2)
     # Wait for the worker to finish
     in_queue1.close()
     in_queue2.close()
