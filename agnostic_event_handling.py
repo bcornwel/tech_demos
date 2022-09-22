@@ -17,6 +17,7 @@ logger = logging.getLogger('agnostic')
 logger.info("agnostic event handling")
 asyncio.run(async_networking.tasks().run())
 
+
 class SchemaValidationError(Exception):
     pass
 
@@ -62,6 +63,7 @@ class Const:
         Job_ID = r"^\d{6}_\d_\d_\d_\d{8}"
     class Generic:
         NA = "N/A"
+
 
 class RegexValidator():
     def validate(self, instance: dict or bool) -> dict:
@@ -226,7 +228,8 @@ class Schemas:
 
 
 FlowRegistry = {}
- 
+
+
 def register_step(name: str) -> Callable:
     """
     Registers a 'test' step in the FlowRegistry dict
@@ -358,9 +361,10 @@ def jsonify(jsondata: Any) -> Any:
         for i, e in enumerate(jsondata):
             jsondata[i] = jsonify(e)
     elif isinstance(jsondata, tuple):
-        return list(jsondata)
-    # else:
-    #     do any other processing here
+        return jsonify(list(jsondata))
+    else:
+        if hasattr(jsondata, "to_json"):
+            return jsonify(jsondata.to_json())
     return jsondata
 
 
