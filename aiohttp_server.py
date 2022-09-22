@@ -259,7 +259,7 @@ class WebServer:
         Returns:
             _type_: _description_
         """
-        location = "https://github.com/bcornwel/tech_demos"
+        location = "https://github.com/bcornwel/tech_demos/blob/main/aiohttp_server.py"
         return web.HTTPFound(location=location)
 
     @web.middleware
