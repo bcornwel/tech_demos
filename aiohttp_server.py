@@ -32,7 +32,6 @@ logger.info("Aiohttp Server log")
 
 helpers.DebugTriggers.FunctionPrinting = False
 helpers.DebugTriggers.Timing = False
-helpers.DebugTriggers.ReturnValues = False
 
 
 class ServerSchemas:
@@ -102,6 +101,7 @@ HandlerRegistry = dict()
 
 
 #@helpers.decorate_all_methods(server_decorator)
+@helpers.decorate_all_methods(helpers.exception_decorator, logger)
 @helpers.decorate_all_methods(helpers.debug_decorator)
 class WebServer:
     routes = web.RouteTableDef()
@@ -115,16 +115,19 @@ class WebServer:
     log_reload = 1000
     site = None
 
-    def __init__(self):
+    def __init__(self, url, port):
+        self.started = False
         logger.setLevel(logging.DEBUG)
         self.tail: helpers.TailLogger = helpers.TailLogger(100)
         log_handler = self.tail.log_handler
         log_handler.setFormatter(helpers.GetLogFormatter())
         logger.addHandler(log_handler)
         logger.addHandler(helpers.GetConsoleLogHandler())
+        self.url = url
+        self.port = port
     
-    def create():
-        WebServer._instance = WebServer()
+    def build(url, port):
+        WebServer._instance = WebServer(url, port)
         return WebServer._instance
 
     @routes.get("/shutdown")
@@ -155,6 +158,14 @@ class WebServer:
 
         Returns:
             _type_: _description_
+        ---
+        tags:
+        - Docs
+        summary: Shows pydoc page(s)
+        produces:
+        - application/html
+        responses:
+        - 200
         """
         f = f"docs/html/{os.path.basename(__file__)[:-3]}.html"
         assert os.path.exists(f), f"Unable to find {f}"
@@ -281,7 +292,7 @@ class WebServer:
             msg = f"Server error for {request.method} {request.url}: {server_exception}: {traceback.format_exc()}"
             logger.error(msg)
             return aiohttp.ClientResponseError(request_info=aiohttp.RequestInfo(request.url, method=request.method, headers=request.headers()),
-                                                   status=requests.codes.error, message=msg, headers=request.headers())
+                                                   status=requests.codes.server_error, message=msg, headers=request.headers())
     
     @routes.get('/log')
     async def log_response(request):
@@ -333,6 +344,7 @@ class WebServer:
             "200":
                 description: successfully displayed put or post data
         """
+        logger.debug("Checked")
         p = request.query.get("path", None)
         if p == "put":
             return await WebServer.check_put_response(request)
@@ -356,7 +368,7 @@ class WebServer:
     @routes.put('/data')
     async def put_response(request: web.Request):
         data = await request.post()
-        logger.debug(f"Putting data {data.keys()}")
+        logger.debug(f"Putting data {[i for i in data.keys()]}")
         added = 0
         try:
             for param in WebServer.expected_put_params:
@@ -413,10 +425,14 @@ class WebServer:
             logger.error(f"{j_data['name']} not in {HandlerRegistry.keys()}")
             raise web.HTTPNotImplemented(reason=f"Unable to find {j_data['name']}", text=f"Cannot run {j_data['name']}")
 
+    @helpers.register_name("say", HandlerRegistry)
+    async def say(self, *args):
+        logger.info(f"{' '.join(args)}")
+
     @helpers.register_name("xyz", HandlerRegistry)
     async def do_xyz(self, *args, **kwargs):
         logger.info(f"xyz uses: args '{args}', and keywords '{kwargs}'")
-        WebClient().send_done_with_gen()
+        # WebClient(self.url, self.port).send_done_with_gen()
 
     async def run_server(self):
         WebServer.app = web.Application(logger=logger, middlewares=[WebServer.middleware])
@@ -432,7 +448,7 @@ class WebServer:
                 )
         })
         
-        WebServer.app.add_routes(self.routes)  # adds the route table definition, comprising functions with the decorator @route
+        WebServer.app.add_routes(WebServer.routes)  # adds the route table definition, comprising functions with the decorator @route
         # Configure CORS on all routes.
         for route in list(WebServer.app.router.routes()):
             cors.add(route)
@@ -441,9 +457,10 @@ class WebServer:
                         description="This is the documentation for the engine", title="MARS 2.0 AIOHTTP demo")
         runner = web.AppRunner(WebServer.app)
         await runner.setup()
-        WebServer.site = web.TCPSite(runner, '127.0.0.1', 12345)
+        WebServer.site = web.TCPSite(runner, self.url, self.port)
         await WebServer.site.start()
         logger.info(f"Running async web server at {WebServer.site.name}")
+        self.started = True
     
     def do_task(loop: asyncio.AbstractEventLoop, task_list: list):
         if len(task_list):
@@ -462,10 +479,12 @@ class WebServer:
         idle = 0
         should_run = True
         loop = asyncio.get_event_loop()
-        wc = WebClient()
-        ws = WebServer.create()
+        url = helpers.resolve_ip(logger=logger)
+        wc = WebClient(url, 12345)
+        ws = WebServer.build(url, 12345)
         run_task = loop.create_task(ws.run_server())
         tasks = [
+                    wc.send_check_to_wrong_url,
                     # wc.send_check,
                     # wc.send_check,
                     # wc.send_ww38,
@@ -489,42 +508,50 @@ class WebServer:
                     # wc.send_ww39,
                     # wc.send_check,
                 ]
-        for i in range(1, 100000):
-            tasks.append(wc.send_check)
+        while not ws.started:
+            await asyncio.sleep(1)
         while should_run:
-            if idle_max == 0:
-                should_run = False
+            if WebServer.do_task(loop, tasks):
+                logger.info(f"Performed task {tasks[0]}")
+                tasks = tasks[1:]
+                idle = 0
             else:
-                if WebServer.do_task(loop, tasks):
-                    logger.info("Performed task")
-                    tasks = tasks[1:]
-                    idle = 0
-                else:
-                    idle += 1
-                    if idle > idle_max:
-                        logger.info("No tasks left!")
-                        should_run = False
-                    await asyncio.sleep(1)
-                    idle_max -= 1
+                idle += 1
+                if idle > idle_max:
+                    logger.info("No tasks left!")
+                    should_run = False
+                await asyncio.sleep(1)
                 WebServer.do_task(loop, [wc.send_ping])
-        await asyncio.sleep(60)  # just to make sure nothing else is running
+            
+        await asyncio.sleep(10)  # just to make sure nothing else is running
 
 
-#@helpers.decorate_all_methods(client_decorator)
+@helpers.decorate_all_methods(helpers.exception_decorator, logger)
 @helpers.decorate_all_methods(helpers.debug_decorator)
-class WebClient():
+class WebClient:
+    def __init__(self, host, port):
+        self.host = host
+        self.port = port
+        self.url = f"http://{self.host}:{self.port}"
+
     async def new_session(self):
         return aiohttp.ClientSession()
     
-    async def get_response(self, path='/', url="http://127.0.0.1:12345", params=None):
+    async def get_response(self, path='/', url=None, params=None):
+        if not url:
+            url = self.url
         async with await self.new_session() as session:
             return await session.get(f"{url}{path}", params=params)
     
-    async def put_response(self, path='/', url="http://127.0.0.1:12345", data=""):
+    async def put_response(self, path='/', url=None, data=""):
+        if not url:
+            url = self.url
         async with await self.new_session() as session:
             return await session.put(f"{url}{path}", data=json.dumps(data))
 
-    async def post_response(self, path='/', url="http://127.0.0.1:12345", data=""):
+    async def post_response(self, path='/', url=None, data=""):
+        if not url:
+            url = self.url
         async with await self.new_session() as session:
                 return await session.post(f"{url}{path}", data=json.dumps(data))
 
@@ -575,6 +602,24 @@ class WebClient():
     async def send_command(self, name="", args=[], kwargs={}):
         async with await self.post_response("/command", data={"name": name, "args": args, "kwargs": kwargs}) as resp:
             await self.print_response(resp)
+    
+    async def send_check_to_wrong_url(self):
+        try:
+            logger.debug("Sending to wrong url")
+            async with await self.get_response("/check", "http://127.0.0.1:12345") as resp:
+                logger.debug(f"bad status: {resp.status}")
+                if resp.status == requests.codes.misdirected_request:
+                    logger.debug(f"Bad as expected")
+                    new_addr = resp.headers.get("useUrl")
+                    logger.debug(f"got misdirected. resending to {new_addr}")
+                    async with await self.get_response("/check", f"http://{new_addr}") as resp:
+                        await self.print_response(resp)
+                else:
+                    logger.debug("Not bad?")
+                    await self.print_response(resp)
+        except Exception as bad_request:
+            msg = f"{bad_request}"
+            logger.error("Bad request: ", msg)
  
 
 if __name__ == "__main__":

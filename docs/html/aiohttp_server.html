@@ -60,7 +60,6 @@ logger.info(&#34;Aiohttp Server log&#34;)
 
 helpers.DebugTriggers.FunctionPrinting = False
 helpers.DebugTriggers.Timing = False
-helpers.DebugTriggers.ReturnValues = False
 
 
 class ServerSchemas:
@@ -104,10 +103,33 @@ def server_decorator(func: Callable) -&gt; Callable:
     return wrapper
 
 
+def client_decorator(func: Callable) -&gt; Callable:
+    &#34;&#34;&#34;
+    prints the return value, meant for server functions to see what data is being returned
+
+    Args:
+        func (Callable): function to wrap
+
+    Returns:
+        Callable: wrapped function
+    &#34;&#34;&#34;
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        # for arg in args:
+        #     arg = json.dumps(utils.remove_comments(arg))
+        for arg in args:
+            arg = json.dumps(arg)
+        ret = func(*args, **kwargs)
+        print(func.__name__, &#34;returned&#34;, f&#34;{ret}&#34;)
+        return ret
+    return wrapper
+
+
 HandlerRegistry = dict()
 
 
 #@helpers.decorate_all_methods(server_decorator)
+@helpers.decorate_all_methods(helpers.exception_decorator, logger)
 @helpers.decorate_all_methods(helpers.debug_decorator)
 class WebServer:
     routes = web.RouteTableDef()
@@ -121,20 +143,32 @@ class WebServer:
     log_reload = 1000
     site = None
 
-    def __init__(self):
+    def __init__(self, url, port):
+        self.started = False
         logger.setLevel(logging.DEBUG)
         self.tail: helpers.TailLogger = helpers.TailLogger(100)
         log_handler = self.tail.log_handler
         log_handler.setFormatter(helpers.GetLogFormatter())
         logger.addHandler(log_handler)
         logger.addHandler(helpers.GetConsoleLogHandler())
+        self.url = url
+        self.port = port
     
-    def create():
-        WebServer._instance = WebServer()
+    def build(url, port):
+        WebServer._instance = WebServer(url, port)
         return WebServer._instance
 
     @routes.get(&#34;/shutdown&#34;)
     async def shutdown(request):
+        &#34;&#34;&#34;
+        Shuts the engine down
+
+        Args:
+            request (web.Request): the original request
+
+        Raises:
+            GracefulExit: _description_
+        &#34;&#34;&#34;
         logger.info(&#34;Shutting down now&#34;)
         raise GracefulExit()
 
@@ -144,10 +178,39 @@ class WebServer:
 
     @routes.get(&#34;/docs&#34;)
     async def pdoc_files(request):
-        return web.FileResponse(f&#34;html/{__file__[:-3]}.html&#34;)
+        &#34;&#34;&#34;
+        Serves up pdoc documentation
+
+        Args:
+            request (web.Request): the original request
+
+        Returns:
+            _type_: _description_
+        ---
+        tags:
+        - Docs
+        summary: Shows pydoc page(s)
+        produces:
+        - application/html
+        responses:
+        - 200
+        &#34;&#34;&#34;
+        f = f&#34;docs/html/{os.path.basename(__file__)[:-3]}.html&#34;
+        assert os.path.exists(f), f&#34;Unable to find {f}&#34;
+        logger.debug(f&#34;Serving up {f}&#34;)
+        return web.FileResponse(path=f)
 
     @routes.get(&#34;/&#34;)
     async def handler(request):
+        &#34;&#34;&#34;
+        session handler for keeping track of session info
+
+        Args:
+            request (web.Request): the original request
+
+        Returns:
+            _type_: _description_
+        &#34;&#34;&#34;
         session = await get_session(request)
         last_visit = session[&#39;last_visit&#39;] if &#39;last_visit&#39; in session else datetime.now()
         text = &#39;Last visited: {}&#39;.format(last_visit)
@@ -155,6 +218,16 @@ class WebServer:
 
     @routes.get(&#34;/update&#34;)
     async def update(request:web.Request):
+        &#34;&#34;&#34;
+        Updates the api routes with a file
+        TODO: need to do more safety checking
+
+        Args:
+            request (web.Request): the original request
+
+        Returns:
+            _type_: _description_
+        &#34;&#34;&#34;
         # from api_ww38 import routes as new_routes
         to_import:dict = request.query
         to_import = to_import.get(&#34;file&#34;, &#34;api_ww38&#34;)
@@ -171,9 +244,18 @@ class WebServer:
         spec.loader.exec_module(new_mod)
         new_routes = new_mod.routes
         added = WebServer.update_routes(new_routes)
-        return web.Response(text=&#34;Updated with {added} routes&#34;)
+        return web.Response(text=f&#34;Updated with {added} routes&#34;)
 
     def update_routes(new_routes: web.RouteTableDef):
+        &#34;&#34;&#34;
+        adds the new routes to the current router object, unfreezes the router
+
+        Args:
+            new_routes (web.RouteTableDef): the routing table
+
+        Returns:
+            _type_: _description_
+        &#34;&#34;&#34;
         WebServer.app.router._frozen = False
         routes_added = WebServer.app.router.add_routes(new_routes)
         WebServer.app.router._frozen = True
@@ -181,6 +263,16 @@ class WebServer:
 
     @routes.get(&#34;/ws&#34;)
     async def websocket_handler(request):
+        &#34;&#34;&#34;
+        Handles websocket requests
+        useful for command control similar to command line
+
+        Args:
+            request (web.Request): the original request
+
+        Returns:
+            _type_: _description_
+        &#34;&#34;&#34;
         ws = web.WebSocketResponse()
         await ws.prepare(request)
         async for msg in ws:
@@ -197,7 +289,16 @@ class WebServer:
 
     @routes.get(&#34;/redirect&#34;)
     async def redirect_handler(request):
-        location = &#34;https://github.com/bcornwel/tech_demos&#34;
+        &#34;&#34;&#34;
+        Handles redirects to other sites
+
+        Args:
+            request (web.Request): the original request
+
+        Returns:
+            _type_: _description_
+        &#34;&#34;&#34;
+        location = &#34;https://github.com/bcornwel/tech_demos/blob/main/aiohttp_server.py&#34;
         return web.HTTPFound(location=location)
 
     @web.middleware
@@ -219,7 +320,7 @@ class WebServer:
             msg = f&#34;Server error for {request.method} {request.url}: {server_exception}: {traceback.format_exc()}&#34;
             logger.error(msg)
             return aiohttp.ClientResponseError(request_info=aiohttp.RequestInfo(request.url, method=request.method, headers=request.headers()),
-                                                   status=requests.codes.error, message=msg, headers=request.headers())
+                                                   status=requests.codes.server_error, message=msg, headers=request.headers())
     
     @routes.get(&#39;/log&#39;)
     async def log_response(request):
@@ -253,6 +354,25 @@ class WebServer:
 
     @routes.get(&#39;/check&#39;)  # custom path
     async def check_response(request:web.Request):
+        &#34;&#34;&#34;
+        Basic get request used to demo getting info
+
+        Args:
+            request (web.Request): the original request
+
+        Returns:
+            _type_: _description_
+        
+        ---
+        description: End-point for displaying demo put an/or post data
+        tags:
+        - GET
+        - state checking
+        responses:
+            &#34;200&#34;:
+                description: successfully displayed put or post data
+        &#34;&#34;&#34;
+        logger.debug(&#34;Checked&#34;)
         p = request.query.get(&#34;path&#34;, None)
         if p == &#34;put&#34;:
             return await WebServer.check_put_response(request)
@@ -261,10 +381,13 @@ class WebServer:
         else:
             return web.Response(text=&#34;Nothing to check&#34;)
         
-    
     @routes.get(&#39;/check/put&#39;)  # custom multi-layer path
     async def check_put_response(request):
         return web.Response(text=f&#34;Put contains {len(WebServer.put_dict)}&#34;)
+
+    @routes.get(&#39;/check2/put&#39;)  # custom multi-layer path
+    async def check2_put_response(request):
+        return web.Response(text=f&#34;Put contains {len(WebServer.put_dict)+1}&#34;)
     
     @routes.get(&#39;/check/post&#39;)
     async def check_post_response(request):
@@ -273,7 +396,7 @@ class WebServer:
     @routes.put(&#39;/data&#39;)
     async def put_response(request: web.Request):
         data = await request.post()
-        logger.debug(f&#34;Putting data {data.keys()}&#34;)
+        logger.debug(f&#34;Putting data {[i for i in data.keys()]}&#34;)
         added = 0
         try:
             for param in WebServer.expected_put_params:
@@ -330,9 +453,14 @@ class WebServer:
             logger.error(f&#34;{j_data[&#39;name&#39;]} not in {HandlerRegistry.keys()}&#34;)
             raise web.HTTPNotImplemented(reason=f&#34;Unable to find {j_data[&#39;name&#39;]}&#34;, text=f&#34;Cannot run {j_data[&#39;name&#39;]}&#34;)
 
+    @helpers.register_name(&#34;say&#34;, HandlerRegistry)
+    async def say(self, *args):
+        logger.info(f&#34;{&#39; &#39;.join(args)}&#34;)
+
     @helpers.register_name(&#34;xyz&#34;, HandlerRegistry)
     async def do_xyz(self, *args, **kwargs):
         logger.info(f&#34;xyz uses: args &#39;{args}&#39;, and keywords &#39;{kwargs}&#39;&#34;)
+        # WebClient(self.url, self.port).send_done_with_gen()
 
     async def run_server(self):
         WebServer.app = web.Application(logger=logger, middlewares=[WebServer.middleware])
@@ -348,7 +476,7 @@ class WebServer:
                 )
         })
         
-        WebServer.app.add_routes(self.routes)  # adds the route table definition, comprising functions with the decorator @route
+        WebServer.app.add_routes(WebServer.routes)  # adds the route table definition, comprising functions with the decorator @route
         # Configure CORS on all routes.
         for route in list(WebServer.app.router.routes()):
             cors.add(route)
@@ -357,9 +485,10 @@ class WebServer:
                         description=&#34;This is the documentation for the engine&#34;, title=&#34;MARS 2.0 AIOHTTP demo&#34;)
         runner = web.AppRunner(WebServer.app)
         await runner.setup()
-        WebServer.site = web.TCPSite(runner, &#39;127.0.0.1&#39;, 12345)
+        WebServer.site = web.TCPSite(runner, self.url, self.port)
         await WebServer.site.start()
         logger.info(f&#34;Running async web server at {WebServer.site.name}&#34;)
+        self.started = True
     
     def do_task(loop: asyncio.AbstractEventLoop, task_list: list):
         if len(task_list):
@@ -378,65 +507,79 @@ class WebServer:
         idle = 0
         should_run = True
         loop = asyncio.get_event_loop()
-        wc = WebClient()
-        ws = WebServer.create()
+        url = helpers.resolve_ip(logger=logger)
+        wc = WebClient(url, 12345)
+        ws = WebServer.build(url, 12345)
         run_task = loop.create_task(ws.run_server())
         tasks = [
-                    wc.send_check,
-                    wc.send_check,
-                    wc.send_check_post,
-                    (wc.send_post, &#34;randomdata&#34;),
-                    wc.send_check,
-                    wc.send_check_post,
-                    (wc.send_check, {&#34;path&#34;: &#34;put&#34;}),
-                    (wc.send_command, &#34;xyz&#34;, [1,2,3], {&#34;name&#34;: &#34;xyz&#34;, &#34;purpose&#34;: &#34;running&#34;}),
-                    wc.send_check,
-                    wc.send_check_post,
-                    wc.send_check,
-                    (wc.send_check, {&#34;path&#34;: &#34;post&#34;}),
-                    (wc.send_update, &#34;api_ww38&#34;),
-                    wc.send_check,
-                    (wc.send_update, &#34;api_ww39&#34;),
-                    wc.send_check,
-                    wc.send_check,
-                    wc.send_ww38,
-                    wc.send_check,
-                    wc.send_ww39,
-                    wc.send_check,
+                    wc.send_check_to_wrong_url,
+                    # wc.send_check,
+                    # wc.send_check,
+                    # wc.send_ww38,
+                    # wc.send_check_post,
+                    # (wc.send_post, &#34;randomdata&#34;),
+                    # wc.send_check,
+                    # wc.send_check_post,
+                    # (wc.send_check, {&#34;path&#34;: &#34;put&#34;}),
+                    # (wc.send_command, &#34;xyz&#34;, [1,2,3], {&#34;name&#34;: &#34;xyz&#34;, &#34;purpose&#34;: &#34;running&#34;}),
+                    # wc.send_check,
+                    # wc.send_check_post,
+                    # wc.send_check,
+                    # (wc.send_check, {&#34;path&#34;: &#34;post&#34;}),
+                    # (wc.send_update, &#34;api_ww38&#34;),
+                    # wc.send_check,
+                    # (wc.send_update, &#34;api_ww39&#34;),
+                    # wc.send_check,
+                    # wc.send_check,
+                    # wc.send_ww38,
+                    # wc.send_check,
+                    # wc.send_ww39,
+                    # wc.send_check,
                 ]
+        while not ws.started:
+            await asyncio.sleep(1)
         while should_run:
-            if idle_max == 0:
-                should_run = False
+            if WebServer.do_task(loop, tasks):
+                logger.info(f&#34;Performed task {tasks[0]}&#34;)
+                tasks = tasks[1:]
+                idle = 0
             else:
-                if WebServer.do_task(loop, tasks):
-                    logger.info(&#34;Performed task&#34;)
-                    tasks = tasks[1:]
-                    idle = 0
-                else:
-                    idle += 1
-                    if idle &gt; 5:
-                        logger.info(&#34;No tasks left!&#34;)
-                        should_run = False
-                    await asyncio.sleep(1)
-                    idle_max -= 1
+                idle += 1
+                if idle &gt; idle_max:
+                    logger.info(&#34;No tasks left!&#34;)
+                    should_run = False
+                await asyncio.sleep(1)
                 WebServer.do_task(loop, [wc.send_ping])
-        await asyncio.sleep(20)  # just to make sure nothing else is running
+            
+        await asyncio.sleep(10)  # just to make sure nothing else is running
 
 
+@helpers.decorate_all_methods(helpers.exception_decorator, logger)
 @helpers.decorate_all_methods(helpers.debug_decorator)
-class WebClient():
+class WebClient:
+    def __init__(self, host, port):
+        self.host = host
+        self.port = port
+        self.url = f&#34;http://{self.host}:{self.port}&#34;
+
     async def new_session(self):
         return aiohttp.ClientSession()
     
-    async def get_response(self, path=&#39;/&#39;, url=&#34;http://127.0.0.1:12345&#34;, params=None):
+    async def get_response(self, path=&#39;/&#39;, url=None, params=None):
+        if not url:
+            url = self.url
         async with await self.new_session() as session:
             return await session.get(f&#34;{url}{path}&#34;, params=params)
     
-    async def put_response(self, path=&#39;/&#39;, url=&#34;http://127.0.0.1:12345&#34;, data=&#34;&#34;):
+    async def put_response(self, path=&#39;/&#39;, url=None, data=&#34;&#34;):
+        if not url:
+            url = self.url
         async with await self.new_session() as session:
             return await session.put(f&#34;{url}{path}&#34;, data=json.dumps(data))
 
-    async def post_response(self, path=&#39;/&#39;, url=&#34;http://127.0.0.1:12345&#34;, data=&#34;&#34;):
+    async def post_response(self, path=&#39;/&#39;, url=None, data=&#34;&#34;):
+        if not url:
+            url = self.url
         async with await self.new_session() as session:
                 return await session.post(f&#34;{url}{path}&#34;, data=json.dumps(data))
 
@@ -447,7 +590,7 @@ class WebClient():
             logger.info(f&#34;Response text: {await resp.text()}&#34;)
 
     async def send_ping(self):
-        async with await self.get_response() as resp:
+        async with await self.get_response(params={&#34;event_id&#34;:123}) as resp:
             await self.print_response(resp)
     
     async def send_check(self, params={}):
@@ -487,9 +630,29 @@ class WebClient():
     async def send_command(self, name=&#34;&#34;, args=[], kwargs={}):
         async with await self.post_response(&#34;/command&#34;, data={&#34;name&#34;: name, &#34;args&#34;: args, &#34;kwargs&#34;: kwargs}) as resp:
             await self.print_response(resp)
-            
+    
+    async def send_check_to_wrong_url(self):
+        try:
+            logger.debug(&#34;Sending to wrong url&#34;)
+            async with await self.get_response(&#34;/check&#34;, &#34;http://127.0.0.1:12345&#34;) as resp:
+                logger.debug(f&#34;bad status: {resp.status}&#34;)
+                if resp.status == requests.codes.misdirected_request:
+                    logger.debug(f&#34;Bad as expected&#34;)
+                    new_addr = resp.headers.get(&#34;useUrl&#34;)
+                    logger.debug(f&#34;got misdirected. resending to {new_addr}&#34;)
+                    async with await self.get_response(&#34;/check&#34;, f&#34;http://{new_addr}&#34;) as resp:
+                        await self.print_response(resp)
+                else:
+                    logger.debug(&#34;Not bad?&#34;)
+                    await self.print_response(resp)
+        except Exception as bad_request:
+            msg = f&#34;{bad_request}&#34;
+            logger.error(&#34;Bad request: &#34;, msg)
+ 
 
 if __name__ == &#34;__main__&#34;:
+    # if &#34;apis&#34; in sys.argv:
+    #     self.update(apis)
     helpers.generate_docs(&#34;docs/html&#34;, os.path.basename(__file__))
     asyncio.run(WebServer.run_demo())
     </code></pre>
@@ -502,6 +665,47 @@ if __name__ == &#34;__main__&#34;:
 <section>
 <h2 class="section-title" id="header-functions">Functions</h2>
 <dl>
+<dt id="aiohttp_server.client_decorator"><code class="name flex">
+<span>def <span class="ident">client_decorator</span></span>(<span>func: Callable) ‑> Callable</span>
+</code></dt>
+<dd>
+<div class="desc"><p>prints the return value, meant for server functions to see what data is being returned</p>
+<h2 id="args">Args</h2>
+<dl>
+<dt><strong><code>func</code></strong> :&ensp;<code>Callable</code></dt>
+<dd>function to wrap</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><code>Callable</code></dt>
+<dd>wrapped function</dd>
+</dl></div>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def client_decorator(func: Callable) -&gt; Callable:
+    &#34;&#34;&#34;
+    prints the return value, meant for server functions to see what data is being returned
+
+    Args:
+        func (Callable): function to wrap
+
+    Returns:
+        Callable: wrapped function
+    &#34;&#34;&#34;
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        # for arg in args:
+        #     arg = json.dumps(utils.remove_comments(arg))
+        for arg in args:
+            arg = json.dumps(arg)
+        ret = func(*args, **kwargs)
+        print(func.__name__, &#34;returned&#34;, f&#34;{ret}&#34;)
+        return ret
+    return wrapper</code></pre>
+</details>
+</dd>
 <dt id="aiohttp_server.server_decorator"><code class="name flex">
 <span>def <span class="ident">server_decorator</span></span>(<span>func: Callable) ‑> Callable</span>
 </code></dt>
@@ -585,6 +789,7 @@ if __name__ == &#34;__main__&#34;:
 </dd>
 <dt id="aiohttp_server.WebClient"><code class="flex name class">
 <span>class <span class="ident">WebClient</span></span>
+<span>(</span><span>host, port)</span>
 </code></dt>
 <dd>
 <div class="desc"></div>
@@ -592,20 +797,32 @@ if __name__ == &#34;__main__&#34;:
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">@helpers.decorate_all_methods(helpers.debug_decorator)
-class WebClient():
+<pre><code class="python">@helpers.decorate_all_methods(helpers.exception_decorator, logger)
+@helpers.decorate_all_methods(helpers.debug_decorator)
+class WebClient:
+    def __init__(self, host, port):
+        self.host = host
+        self.port = port
+        self.url = f&#34;http://{self.host}:{self.port}&#34;
+
     async def new_session(self):
         return aiohttp.ClientSession()
     
-    async def get_response(self, path=&#39;/&#39;, url=&#34;http://127.0.0.1:12345&#34;, params=None):
+    async def get_response(self, path=&#39;/&#39;, url=None, params=None):
+        if not url:
+            url = self.url
         async with await self.new_session() as session:
             return await session.get(f&#34;{url}{path}&#34;, params=params)
     
-    async def put_response(self, path=&#39;/&#39;, url=&#34;http://127.0.0.1:12345&#34;, data=&#34;&#34;):
+    async def put_response(self, path=&#39;/&#39;, url=None, data=&#34;&#34;):
+        if not url:
+            url = self.url
         async with await self.new_session() as session:
             return await session.put(f&#34;{url}{path}&#34;, data=json.dumps(data))
 
-    async def post_response(self, path=&#39;/&#39;, url=&#34;http://127.0.0.1:12345&#34;, data=&#34;&#34;):
+    async def post_response(self, path=&#39;/&#39;, url=None, data=&#34;&#34;):
+        if not url:
+            url = self.url
         async with await self.new_session() as session:
                 return await session.post(f&#34;{url}{path}&#34;, data=json.dumps(data))
 
@@ -616,7 +833,7 @@ class WebClient():
             logger.info(f&#34;Response text: {await resp.text()}&#34;)
 
     async def send_ping(self):
-        async with await self.get_response() as resp:
+        async with await self.get_response(params={&#34;event_id&#34;:123}) as resp:
             await self.print_response(resp)
     
     async def send_check(self, params={}):
@@ -655,12 +872,30 @@ class WebClient():
 
     async def send_command(self, name=&#34;&#34;, args=[], kwargs={}):
         async with await self.post_response(&#34;/command&#34;, data={&#34;name&#34;: name, &#34;args&#34;: args, &#34;kwargs&#34;: kwargs}) as resp:
-            await self.print_response(resp)</code></pre>
+            await self.print_response(resp)
+    
+    async def send_check_to_wrong_url(self):
+        try:
+            logger.debug(&#34;Sending to wrong url&#34;)
+            async with await self.get_response(&#34;/check&#34;, &#34;http://127.0.0.1:12345&#34;) as resp:
+                logger.debug(f&#34;bad status: {resp.status}&#34;)
+                if resp.status == requests.codes.misdirected_request:
+                    logger.debug(f&#34;Bad as expected&#34;)
+                    new_addr = resp.headers.get(&#34;useUrl&#34;)
+                    logger.debug(f&#34;got misdirected. resending to {new_addr}&#34;)
+                    async with await self.get_response(&#34;/check&#34;, f&#34;http://{new_addr}&#34;) as resp:
+                        await self.print_response(resp)
+                else:
+                    logger.debug(&#34;Not bad?&#34;)
+                    await self.print_response(resp)
+        except Exception as bad_request:
+            msg = f&#34;{bad_request}&#34;
+            logger.error(&#34;Bad request: &#34;, msg)</code></pre>
 </details>
 <h3>Methods</h3>
 <dl>
 <dt id="aiohttp_server.WebClient.get_response"><code class="name flex">
-<span>async def <span class="ident">get_response</span></span>(<span>self, path='/', url='http://127.0.0.1:12345', params=None)</span>
+<span>async def <span class="ident">get_response</span></span>(<span>self, path='/', url=None, params=None)</span>
 </code></dt>
 <dd>
 <div class="desc"></div>
@@ -668,7 +903,9 @@ class WebClient():
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">async def get_response(self, path=&#39;/&#39;, url=&#34;http://127.0.0.1:12345&#34;, params=None):
+<pre><code class="python">async def get_response(self, path=&#39;/&#39;, url=None, params=None):
+    if not url:
+        url = self.url
     async with await self.new_session() as session:
         return await session.get(f&#34;{url}{path}&#34;, params=params)</code></pre>
 </details>
@@ -687,7 +924,7 @@ class WebClient():
 </details>
 </dd>
 <dt id="aiohttp_server.WebClient.post_response"><code class="name flex">
-<span>async def <span class="ident">post_response</span></span>(<span>self, path='/', url='http://127.0.0.1:12345', data='')</span>
+<span>async def <span class="ident">post_response</span></span>(<span>self, path='/', url=None, data='')</span>
 </code></dt>
 <dd>
 <div class="desc"></div>
@@ -695,7 +932,9 @@ class WebClient():
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">async def post_response(self, path=&#39;/&#39;, url=&#34;http://127.0.0.1:12345&#34;, data=&#34;&#34;):
+<pre><code class="python">async def post_response(self, path=&#39;/&#39;, url=None, data=&#34;&#34;):
+    if not url:
+        url = self.url
     async with await self.new_session() as session:
             return await session.post(f&#34;{url}{path}&#34;, data=json.dumps(data))</code></pre>
 </details>
@@ -717,7 +956,7 @@ class WebClient():
 </details>
 </dd>
 <dt id="aiohttp_server.WebClient.put_response"><code class="name flex">
-<span>async def <span class="ident">put_response</span></span>(<span>self, path='/', url='http://127.0.0.1:12345', data='')</span>
+<span>async def <span class="ident">put_response</span></span>(<span>self, path='/', url=None, data='')</span>
 </code></dt>
 <dd>
 <div class="desc"></div>
@@ -725,7 +964,9 @@ class WebClient():
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">async def put_response(self, path=&#39;/&#39;, url=&#34;http://127.0.0.1:12345&#34;, data=&#34;&#34;):
+<pre><code class="python">async def put_response(self, path=&#39;/&#39;, url=None, data=&#34;&#34;):
+    if not url:
+        url = self.url
     async with await self.new_session() as session:
         return await session.put(f&#34;{url}{path}&#34;, data=json.dumps(data))</code></pre>
 </details>
@@ -772,6 +1013,34 @@ class WebClient():
         await self.print_response(resp)</code></pre>
 </details>
 </dd>
+<dt id="aiohttp_server.WebClient.send_check_to_wrong_url"><code class="name flex">
+<span>async def <span class="ident">send_check_to_wrong_url</span></span>(<span>self)</span>
+</code></dt>
+<dd>
+<div class="desc"></div>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">async def send_check_to_wrong_url(self):
+    try:
+        logger.debug(&#34;Sending to wrong url&#34;)
+        async with await self.get_response(&#34;/check&#34;, &#34;http://127.0.0.1:12345&#34;) as resp:
+            logger.debug(f&#34;bad status: {resp.status}&#34;)
+            if resp.status == requests.codes.misdirected_request:
+                logger.debug(f&#34;Bad as expected&#34;)
+                new_addr = resp.headers.get(&#34;useUrl&#34;)
+                logger.debug(f&#34;got misdirected. resending to {new_addr}&#34;)
+                async with await self.get_response(&#34;/check&#34;, f&#34;http://{new_addr}&#34;) as resp:
+                    await self.print_response(resp)
+            else:
+                logger.debug(&#34;Not bad?&#34;)
+                await self.print_response(resp)
+    except Exception as bad_request:
+        msg = f&#34;{bad_request}&#34;
+        logger.error(&#34;Bad request: &#34;, msg)</code></pre>
+</details>
+</dd>
 <dt id="aiohttp_server.WebClient.send_command"><code class="name flex">
 <span>async def <span class="ident">send_command</span></span>(<span>self, name='', args=[], kwargs={})</span>
 </code></dt>
@@ -796,7 +1065,7 @@ class WebClient():
 <span>Expand source code</span>
 </summary>
 <pre><code class="python">async def send_ping(self):
-    async with await self.get_response() as resp:
+    async with await self.get_response(params={&#34;event_id&#34;:123}) as resp:
         await self.print_response(resp)</code></pre>
 </details>
 </dd>
@@ -876,6 +1145,7 @@ class WebClient():
 </dd>
 <dt id="aiohttp_server.WebServer"><code class="flex name class">
 <span>class <span class="ident">WebServer</span></span>
+<span>(</span><span>url, port)</span>
 </code></dt>
 <dd>
 <div class="desc"></div>
@@ -883,7 +1153,8 @@ class WebClient():
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">@helpers.decorate_all_methods(helpers.debug_decorator)
+<pre><code class="python">@helpers.decorate_all_methods(helpers.exception_decorator, logger)
+@helpers.decorate_all_methods(helpers.debug_decorator)
 class WebServer:
     routes = web.RouteTableDef()
     put_dict = dict()  # put is idempotent
@@ -896,20 +1167,32 @@ class WebServer:
     log_reload = 1000
     site = None
 
-    def __init__(self):
+    def __init__(self, url, port):
+        self.started = False
         logger.setLevel(logging.DEBUG)
         self.tail: helpers.TailLogger = helpers.TailLogger(100)
         log_handler = self.tail.log_handler
         log_handler.setFormatter(helpers.GetLogFormatter())
         logger.addHandler(log_handler)
         logger.addHandler(helpers.GetConsoleLogHandler())
+        self.url = url
+        self.port = port
     
-    def create():
-        WebServer._instance = WebServer()
+    def build(url, port):
+        WebServer._instance = WebServer(url, port)
         return WebServer._instance
 
     @routes.get(&#34;/shutdown&#34;)
     async def shutdown(request):
+        &#34;&#34;&#34;
+        Shuts the engine down
+
+        Args:
+            request (web.Request): the original request
+
+        Raises:
+            GracefulExit: _description_
+        &#34;&#34;&#34;
         logger.info(&#34;Shutting down now&#34;)
         raise GracefulExit()
 
@@ -919,10 +1202,39 @@ class WebServer:
 
     @routes.get(&#34;/docs&#34;)
     async def pdoc_files(request):
-        return web.FileResponse(f&#34;html/{__file__[:-3]}.html&#34;)
+        &#34;&#34;&#34;
+        Serves up pdoc documentation
+
+        Args:
+            request (web.Request): the original request
+
+        Returns:
+            _type_: _description_
+        ---
+        tags:
+        - Docs
+        summary: Shows pydoc page(s)
+        produces:
+        - application/html
+        responses:
+        - 200
+        &#34;&#34;&#34;
+        f = f&#34;docs/html/{os.path.basename(__file__)[:-3]}.html&#34;
+        assert os.path.exists(f), f&#34;Unable to find {f}&#34;
+        logger.debug(f&#34;Serving up {f}&#34;)
+        return web.FileResponse(path=f)
 
     @routes.get(&#34;/&#34;)
     async def handler(request):
+        &#34;&#34;&#34;
+        session handler for keeping track of session info
+
+        Args:
+            request (web.Request): the original request
+
+        Returns:
+            _type_: _description_
+        &#34;&#34;&#34;
         session = await get_session(request)
         last_visit = session[&#39;last_visit&#39;] if &#39;last_visit&#39; in session else datetime.now()
         text = &#39;Last visited: {}&#39;.format(last_visit)
@@ -930,6 +1242,16 @@ class WebServer:
 
     @routes.get(&#34;/update&#34;)
     async def update(request:web.Request):
+        &#34;&#34;&#34;
+        Updates the api routes with a file
+        TODO: need to do more safety checking
+
+        Args:
+            request (web.Request): the original request
+
+        Returns:
+            _type_: _description_
+        &#34;&#34;&#34;
         # from api_ww38 import routes as new_routes
         to_import:dict = request.query
         to_import = to_import.get(&#34;file&#34;, &#34;api_ww38&#34;)
@@ -946,9 +1268,18 @@ class WebServer:
         spec.loader.exec_module(new_mod)
         new_routes = new_mod.routes
         added = WebServer.update_routes(new_routes)
-        return web.Response(text=&#34;Updated with {added} routes&#34;)
+        return web.Response(text=f&#34;Updated with {added} routes&#34;)
 
     def update_routes(new_routes: web.RouteTableDef):
+        &#34;&#34;&#34;
+        adds the new routes to the current router object, unfreezes the router
+
+        Args:
+            new_routes (web.RouteTableDef): the routing table
+
+        Returns:
+            _type_: _description_
+        &#34;&#34;&#34;
         WebServer.app.router._frozen = False
         routes_added = WebServer.app.router.add_routes(new_routes)
         WebServer.app.router._frozen = True
@@ -956,6 +1287,16 @@ class WebServer:
 
     @routes.get(&#34;/ws&#34;)
     async def websocket_handler(request):
+        &#34;&#34;&#34;
+        Handles websocket requests
+        useful for command control similar to command line
+
+        Args:
+            request (web.Request): the original request
+
+        Returns:
+            _type_: _description_
+        &#34;&#34;&#34;
         ws = web.WebSocketResponse()
         await ws.prepare(request)
         async for msg in ws:
@@ -972,7 +1313,16 @@ class WebServer:
 
     @routes.get(&#34;/redirect&#34;)
     async def redirect_handler(request):
-        location = &#34;https://github.com/bcornwel/tech_demos&#34;
+        &#34;&#34;&#34;
+        Handles redirects to other sites
+
+        Args:
+            request (web.Request): the original request
+
+        Returns:
+            _type_: _description_
+        &#34;&#34;&#34;
+        location = &#34;https://github.com/bcornwel/tech_demos/blob/main/aiohttp_server.py&#34;
         return web.HTTPFound(location=location)
 
     @web.middleware
@@ -994,7 +1344,7 @@ class WebServer:
             msg = f&#34;Server error for {request.method} {request.url}: {server_exception}: {traceback.format_exc()}&#34;
             logger.error(msg)
             return aiohttp.ClientResponseError(request_info=aiohttp.RequestInfo(request.url, method=request.method, headers=request.headers()),
-                                                   status=requests.codes.error, message=msg, headers=request.headers())
+                                                   status=requests.codes.server_error, message=msg, headers=request.headers())
     
     @routes.get(&#39;/log&#39;)
     async def log_response(request):
@@ -1028,6 +1378,25 @@ class WebServer:
 
     @routes.get(&#39;/check&#39;)  # custom path
     async def check_response(request:web.Request):
+        &#34;&#34;&#34;
+        Basic get request used to demo getting info
+
+        Args:
+            request (web.Request): the original request
+
+        Returns:
+            _type_: _description_
+        
+        ---
+        description: End-point for displaying demo put an/or post data
+        tags:
+        - GET
+        - state checking
+        responses:
+            &#34;200&#34;:
+                description: successfully displayed put or post data
+        &#34;&#34;&#34;
+        logger.debug(&#34;Checked&#34;)
         p = request.query.get(&#34;path&#34;, None)
         if p == &#34;put&#34;:
             return await WebServer.check_put_response(request)
@@ -1036,10 +1405,13 @@ class WebServer:
         else:
             return web.Response(text=&#34;Nothing to check&#34;)
         
-    
     @routes.get(&#39;/check/put&#39;)  # custom multi-layer path
     async def check_put_response(request):
         return web.Response(text=f&#34;Put contains {len(WebServer.put_dict)}&#34;)
+
+    @routes.get(&#39;/check2/put&#39;)  # custom multi-layer path
+    async def check2_put_response(request):
+        return web.Response(text=f&#34;Put contains {len(WebServer.put_dict)+1}&#34;)
     
     @routes.get(&#39;/check/post&#39;)
     async def check_post_response(request):
@@ -1048,7 +1420,7 @@ class WebServer:
     @routes.put(&#39;/data&#39;)
     async def put_response(request: web.Request):
         data = await request.post()
-        logger.debug(f&#34;Putting data {data.keys()}&#34;)
+        logger.debug(f&#34;Putting data {[i for i in data.keys()]}&#34;)
         added = 0
         try:
             for param in WebServer.expected_put_params:
@@ -1105,9 +1477,14 @@ class WebServer:
             logger.error(f&#34;{j_data[&#39;name&#39;]} not in {HandlerRegistry.keys()}&#34;)
             raise web.HTTPNotImplemented(reason=f&#34;Unable to find {j_data[&#39;name&#39;]}&#34;, text=f&#34;Cannot run {j_data[&#39;name&#39;]}&#34;)
 
+    @helpers.register_name(&#34;say&#34;, HandlerRegistry)
+    async def say(self, *args):
+        logger.info(f&#34;{&#39; &#39;.join(args)}&#34;)
+
     @helpers.register_name(&#34;xyz&#34;, HandlerRegistry)
     async def do_xyz(self, *args, **kwargs):
         logger.info(f&#34;xyz uses: args &#39;{args}&#39;, and keywords &#39;{kwargs}&#39;&#34;)
+        # WebClient(self.url, self.port).send_done_with_gen()
 
     async def run_server(self):
         WebServer.app = web.Application(logger=logger, middlewares=[WebServer.middleware])
@@ -1123,7 +1500,7 @@ class WebServer:
                 )
         })
         
-        WebServer.app.add_routes(self.routes)  # adds the route table definition, comprising functions with the decorator @route
+        WebServer.app.add_routes(WebServer.routes)  # adds the route table definition, comprising functions with the decorator @route
         # Configure CORS on all routes.
         for route in list(WebServer.app.router.routes()):
             cors.add(route)
@@ -1132,9 +1509,10 @@ class WebServer:
                         description=&#34;This is the documentation for the engine&#34;, title=&#34;MARS 2.0 AIOHTTP demo&#34;)
         runner = web.AppRunner(WebServer.app)
         await runner.setup()
-        WebServer.site = web.TCPSite(runner, &#39;127.0.0.1&#39;, 12345)
+        WebServer.site = web.TCPSite(runner, self.url, self.port)
         await WebServer.site.start()
         logger.info(f&#34;Running async web server at {WebServer.site.name}&#34;)
+        self.started = True
     
     def do_task(loop: asyncio.AbstractEventLoop, task_list: list):
         if len(task_list):
@@ -1153,49 +1531,51 @@ class WebServer:
         idle = 0
         should_run = True
         loop = asyncio.get_event_loop()
-        wc = WebClient()
-        ws = WebServer.create()
+        url = helpers.resolve_ip(logger=logger)
+        wc = WebClient(url, 12345)
+        ws = WebServer.build(url, 12345)
         run_task = loop.create_task(ws.run_server())
         tasks = [
-                    wc.send_check,
-                    wc.send_check,
-                    wc.send_check_post,
-                    (wc.send_post, &#34;randomdata&#34;),
-                    wc.send_check,
-                    wc.send_check_post,
-                    (wc.send_check, {&#34;path&#34;: &#34;put&#34;}),
-                    (wc.send_command, &#34;xyz&#34;, [1,2,3], {&#34;name&#34;: &#34;xyz&#34;, &#34;purpose&#34;: &#34;running&#34;}),
-                    wc.send_check,
-                    wc.send_check_post,
-                    wc.send_check,
-                    (wc.send_check, {&#34;path&#34;: &#34;post&#34;}),
-                    (wc.send_update, &#34;api_ww38&#34;),
-                    wc.send_check,
-                    (wc.send_update, &#34;api_ww39&#34;),
-                    wc.send_check,
-                    wc.send_check,
-                    wc.send_ww38,
-                    wc.send_check,
-                    wc.send_ww39,
-                    wc.send_check,
+                    wc.send_check_to_wrong_url,
+                    # wc.send_check,
+                    # wc.send_check,
+                    # wc.send_ww38,
+                    # wc.send_check_post,
+                    # (wc.send_post, &#34;randomdata&#34;),
+                    # wc.send_check,
+                    # wc.send_check_post,
+                    # (wc.send_check, {&#34;path&#34;: &#34;put&#34;}),
+                    # (wc.send_command, &#34;xyz&#34;, [1,2,3], {&#34;name&#34;: &#34;xyz&#34;, &#34;purpose&#34;: &#34;running&#34;}),
+                    # wc.send_check,
+                    # wc.send_check_post,
+                    # wc.send_check,
+                    # (wc.send_check, {&#34;path&#34;: &#34;post&#34;}),
+                    # (wc.send_update, &#34;api_ww38&#34;),
+                    # wc.send_check,
+                    # (wc.send_update, &#34;api_ww39&#34;),
+                    # wc.send_check,
+                    # wc.send_check,
+                    # wc.send_ww38,
+                    # wc.send_check,
+                    # wc.send_ww39,
+                    # wc.send_check,
                 ]
+        while not ws.started:
+            await asyncio.sleep(1)
         while should_run:
-            if idle_max == 0:
-                should_run = False
+            if WebServer.do_task(loop, tasks):
+                logger.info(f&#34;Performed task {tasks[0]}&#34;)
+                tasks = tasks[1:]
+                idle = 0
             else:
-                if WebServer.do_task(loop, tasks):
-                    logger.info(&#34;Performed task&#34;)
-                    tasks = tasks[1:]
-                    idle = 0
-                else:
-                    idle += 1
-                    if idle &gt; 5:
-                        logger.info(&#34;No tasks left!&#34;)
-                        should_run = False
-                    await asyncio.sleep(1)
-                    idle_max -= 1
+                idle += 1
+                if idle &gt; idle_max:
+                    logger.info(&#34;No tasks left!&#34;)
+                    should_run = False
+                await asyncio.sleep(1)
                 WebServer.do_task(loop, [wc.send_ping])
-        await asyncio.sleep(20)  # just to make sure nothing else is running</code></pre>
+            
+        await asyncio.sleep(10)  # just to make sure nothing else is running</code></pre>
 </details>
 <h3>Class variables</h3>
 <dl>
@@ -1234,6 +1614,34 @@ class WebServer:
 </dl>
 <h3>Methods</h3>
 <dl>
+<dt id="aiohttp_server.WebServer.build"><code class="name flex">
+<span>def <span class="ident">build</span></span>(<span>url, port)</span>
+</code></dt>
+<dd>
+<div class="desc"></div>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def build(url, port):
+    WebServer._instance = WebServer(url, port)
+    return WebServer._instance</code></pre>
+</details>
+</dd>
+<dt id="aiohttp_server.WebServer.check2_put_response"><code class="name flex">
+<span>async def <span class="ident">check2_put_response</span></span>(<span>request)</span>
+</code></dt>
+<dd>
+<div class="desc"></div>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@routes.get(&#39;/check2/put&#39;)  # custom multi-layer path
+async def check2_put_response(request):
+    return web.Response(text=f&#34;Put contains {len(WebServer.put_dict)+1}&#34;)</code></pre>
+</details>
+</dd>
 <dt id="aiohttp_server.WebServer.check_post_response"><code class="name flex">
 <span>async def <span class="ident">check_post_response</span></span>(<span>request)</span>
 </code></dt>
@@ -1266,13 +1674,50 @@ async def check_put_response(request):
 <span>async def <span class="ident">check_response</span></span>(<span>request: aiohttp.web_request.Request)</span>
 </code></dt>
 <dd>
-<div class="desc"></div>
+<div class="desc"><p>Basic get request used to demo getting info</p>
+<h2 id="args">Args</h2>
+<dl>
+<dt><strong><code>request</code></strong> :&ensp;<code>web.Request</code></dt>
+<dd>the original request</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><code>_type_</code></dt>
+<dd><em>description</em></dd>
+</dl>
+<hr>
+<p>description: End-point for displaying demo put an/or post data
+tags:
+- GET
+- state checking
+responses:
+"200":
+description: successfully displayed put or post data</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
 </summary>
 <pre><code class="python">@routes.get(&#39;/check&#39;)  # custom path
 async def check_response(request:web.Request):
+    &#34;&#34;&#34;
+    Basic get request used to demo getting info
+
+    Args:
+        request (web.Request): the original request
+
+    Returns:
+        _type_: _description_
+    
+    ---
+    description: End-point for displaying demo put an/or post data
+    tags:
+    - GET
+    - state checking
+    responses:
+        &#34;200&#34;:
+            description: successfully displayed put or post data
+    &#34;&#34;&#34;
+    logger.debug(&#34;Checked&#34;)
     p = request.query.get(&#34;path&#34;, None)
     if p == &#34;put&#34;:
         return await WebServer.check_put_response(request)
@@ -1327,20 +1772,6 @@ async def command_handler(request: web.Request):
         raise web.HTTPNotImplemented(reason=f&#34;Unable to find {j_data[&#39;name&#39;]}&#34;, text=f&#34;Cannot run {j_data[&#39;name&#39;]}&#34;)</code></pre>
 </details>
 </dd>
-<dt id="aiohttp_server.WebServer.create"><code class="name flex">
-<span>def <span class="ident">create</span></span>(<span>)</span>
-</code></dt>
-<dd>
-<div class="desc"></div>
-<details class="source">
-<summary>
-<span>Expand source code</span>
-</summary>
-<pre><code class="python">def create():
-    WebServer._instance = WebServer()
-    return WebServer._instance</code></pre>
-</details>
-</dd>
 <dt id="aiohttp_server.WebServer.do_task"><code class="name flex">
 <span>def <span class="ident">do_task</span></span>(<span>loop: asyncio.events.AbstractEventLoop, task_list: list)</span>
 </code></dt>
@@ -1373,7 +1804,8 @@ async def command_handler(request: web.Request):
 </summary>
 <pre><code class="python">@helpers.register_name(&#34;xyz&#34;, HandlerRegistry)
 async def do_xyz(self, *args, **kwargs):
-    logger.info(f&#34;xyz uses: args &#39;{args}&#39;, and keywords &#39;{kwargs}&#39;&#34;)</code></pre>
+    logger.info(f&#34;xyz uses: args &#39;{args}&#39;, and keywords &#39;{kwargs}&#39;&#34;)
+    # WebClient(self.url, self.port).send_done_with_gen()</code></pre>
 </details>
 </dd>
 <dt id="aiohttp_server.WebServer.favicon"><code class="name flex">
@@ -1394,13 +1826,32 @@ async def favicon(request):
 <span>async def <span class="ident">handler</span></span>(<span>request)</span>
 </code></dt>
 <dd>
-<div class="desc"></div>
+<div class="desc"><p>session handler for keeping track of session info</p>
+<h2 id="args">Args</h2>
+<dl>
+<dt><strong><code>request</code></strong> :&ensp;<code>web.Request</code></dt>
+<dd>the original request</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><code>_type_</code></dt>
+<dd><em>description</em></dd>
+</dl></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
 </summary>
 <pre><code class="python">@routes.get(&#34;/&#34;)
 async def handler(request):
+    &#34;&#34;&#34;
+    session handler for keeping track of session info
+
+    Args:
+        request (web.Request): the original request
+
+    Returns:
+        _type_: _description_
+    &#34;&#34;&#34;
     session = await get_session(request)
     last_visit = session[&#39;last_visit&#39;] if &#39;last_visit&#39; in session else datetime.now()
     text = &#39;Last visited: {}&#39;.format(last_visit)
@@ -1530,21 +1981,59 @@ async def middleware(request: web.Request, handler: Callable[[web.Request], Awai
         msg = f&#34;Server error for {request.method} {request.url}: {server_exception}: {traceback.format_exc()}&#34;
         logger.error(msg)
         return aiohttp.ClientResponseError(request_info=aiohttp.RequestInfo(request.url, method=request.method, headers=request.headers()),
-                                               status=requests.codes.error, message=msg, headers=request.headers())</code></pre>
+                                               status=requests.codes.server_error, message=msg, headers=request.headers())</code></pre>
 </details>
 </dd>
 <dt id="aiohttp_server.WebServer.pdoc_files"><code class="name flex">
 <span>async def <span class="ident">pdoc_files</span></span>(<span>request)</span>
 </code></dt>
 <dd>
-<div class="desc"></div>
+<div class="desc"><p>Serves up pdoc documentation</p>
+<h2 id="args">Args</h2>
+<dl>
+<dt><strong><code>request</code></strong> :&ensp;<code>web.Request</code></dt>
+<dd>the original request</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><code>_type_</code></dt>
+<dd><em>description</em></dd>
+</dl>
+<hr>
+<p>tags:
+- Docs
+summary: Shows pydoc page(s)
+produces:
+- application/html
+responses:
+- 200</p></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
 </summary>
 <pre><code class="python">@routes.get(&#34;/docs&#34;)
 async def pdoc_files(request):
-    return web.FileResponse(f&#34;html/{__file__[:-3]}.html&#34;)</code></pre>
+    &#34;&#34;&#34;
+    Serves up pdoc documentation
+
+    Args:
+        request (web.Request): the original request
+
+    Returns:
+        _type_: _description_
+    ---
+    tags:
+    - Docs
+    summary: Shows pydoc page(s)
+    produces:
+    - application/html
+    responses:
+    - 200
+    &#34;&#34;&#34;
+    f = f&#34;docs/html/{os.path.basename(__file__)[:-3]}.html&#34;
+    assert os.path.exists(f), f&#34;Unable to find {f}&#34;
+    logger.debug(f&#34;Serving up {f}&#34;)
+    return web.FileResponse(path=f)</code></pre>
 </details>
 </dd>
 <dt id="aiohttp_server.WebServer.put_response"><code class="name flex">
@@ -1559,7 +2048,7 @@ async def pdoc_files(request):
 <pre><code class="python">@routes.put(&#39;/data&#39;)
 async def put_response(request: web.Request):
     data = await request.post()
-    logger.debug(f&#34;Putting data {data.keys()}&#34;)
+    logger.debug(f&#34;Putting data {[i for i in data.keys()]}&#34;)
     added = 0
     try:
         for param in WebServer.expected_put_params:
@@ -1580,14 +2069,33 @@ async def put_response(request: web.Request):
 <span>async def <span class="ident">redirect_handler</span></span>(<span>request)</span>
 </code></dt>
 <dd>
-<div class="desc"></div>
+<div class="desc"><p>Handles redirects to other sites</p>
+<h2 id="args">Args</h2>
+<dl>
+<dt><strong><code>request</code></strong> :&ensp;<code>web.Request</code></dt>
+<dd>the original request</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><code>_type_</code></dt>
+<dd><em>description</em></dd>
+</dl></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
 </summary>
 <pre><code class="python">@routes.get(&#34;/redirect&#34;)
 async def redirect_handler(request):
-    location = &#34;https://github.com/bcornwel/tech_demos&#34;
+    &#34;&#34;&#34;
+    Handles redirects to other sites
+
+    Args:
+        request (web.Request): the original request
+
+    Returns:
+        _type_: _description_
+    &#34;&#34;&#34;
+    location = &#34;https://github.com/bcornwel/tech_demos/blob/main/aiohttp_server.py&#34;
     return web.HTTPFound(location=location)</code></pre>
 </details>
 </dd>
@@ -1606,49 +2114,51 @@ async def redirect_handler(request):
     idle = 0
     should_run = True
     loop = asyncio.get_event_loop()
-    wc = WebClient()
-    ws = WebServer.create()
+    url = helpers.resolve_ip(logger=logger)
+    wc = WebClient(url, 12345)
+    ws = WebServer.build(url, 12345)
     run_task = loop.create_task(ws.run_server())
     tasks = [
-                wc.send_check,
-                wc.send_check,
-                wc.send_check_post,
-                (wc.send_post, &#34;randomdata&#34;),
-                wc.send_check,
-                wc.send_check_post,
-                (wc.send_check, {&#34;path&#34;: &#34;put&#34;}),
-                (wc.send_command, &#34;xyz&#34;, [1,2,3], {&#34;name&#34;: &#34;xyz&#34;, &#34;purpose&#34;: &#34;running&#34;}),
-                wc.send_check,
-                wc.send_check_post,
-                wc.send_check,
-                (wc.send_check, {&#34;path&#34;: &#34;post&#34;}),
-                (wc.send_update, &#34;api_ww38&#34;),
-                wc.send_check,
-                (wc.send_update, &#34;api_ww39&#34;),
-                wc.send_check,
-                wc.send_check,
-                wc.send_ww38,
-                wc.send_check,
-                wc.send_ww39,
-                wc.send_check,
+                wc.send_check_to_wrong_url,
+                # wc.send_check,
+                # wc.send_check,
+                # wc.send_ww38,
+                # wc.send_check_post,
+                # (wc.send_post, &#34;randomdata&#34;),
+                # wc.send_check,
+                # wc.send_check_post,
+                # (wc.send_check, {&#34;path&#34;: &#34;put&#34;}),
+                # (wc.send_command, &#34;xyz&#34;, [1,2,3], {&#34;name&#34;: &#34;xyz&#34;, &#34;purpose&#34;: &#34;running&#34;}),
+                # wc.send_check,
+                # wc.send_check_post,
+                # wc.send_check,
+                # (wc.send_check, {&#34;path&#34;: &#34;post&#34;}),
+                # (wc.send_update, &#34;api_ww38&#34;),
+                # wc.send_check,
+                # (wc.send_update, &#34;api_ww39&#34;),
+                # wc.send_check,
+                # wc.send_check,
+                # wc.send_ww38,
+                # wc.send_check,
+                # wc.send_ww39,
+                # wc.send_check,
             ]
+    while not ws.started:
+        await asyncio.sleep(1)
     while should_run:
-        if idle_max == 0:
-            should_run = False
+        if WebServer.do_task(loop, tasks):
+            logger.info(f&#34;Performed task {tasks[0]}&#34;)
+            tasks = tasks[1:]
+            idle = 0
         else:
-            if WebServer.do_task(loop, tasks):
-                logger.info(&#34;Performed task&#34;)
-                tasks = tasks[1:]
-                idle = 0
-            else:
-                idle += 1
-                if idle &gt; 5:
-                    logger.info(&#34;No tasks left!&#34;)
-                    should_run = False
-                await asyncio.sleep(1)
-                idle_max -= 1
+            idle += 1
+            if idle &gt; idle_max:
+                logger.info(&#34;No tasks left!&#34;)
+                should_run = False
+            await asyncio.sleep(1)
             WebServer.do_task(loop, [wc.send_ping])
-    await asyncio.sleep(20)  # just to make sure nothing else is running</code></pre>
+        
+    await asyncio.sleep(10)  # just to make sure nothing else is running</code></pre>
 </details>
 </dd>
 <dt id="aiohttp_server.WebServer.run_server"><code class="name flex">
@@ -1674,7 +2184,7 @@ async def redirect_handler(request):
             )
     })
     
-    WebServer.app.add_routes(self.routes)  # adds the route table definition, comprising functions with the decorator @route
+    WebServer.app.add_routes(WebServer.routes)  # adds the route table definition, comprising functions with the decorator @route
     # Configure CORS on all routes.
     for route in list(WebServer.app.router.routes()):
         cors.add(route)
@@ -1683,13 +2193,14 @@ async def redirect_handler(request):
                     description=&#34;This is the documentation for the engine&#34;, title=&#34;MARS 2.0 AIOHTTP demo&#34;)
     runner = web.AppRunner(WebServer.app)
     await runner.setup()
-    WebServer.site = web.TCPSite(runner, &#39;127.0.0.1&#39;, 12345)
+    WebServer.site = web.TCPSite(runner, self.url, self.port)
     await WebServer.site.start()
-    logger.info(f&#34;Running async web server at {WebServer.site.name}&#34;)</code></pre>
+    logger.info(f&#34;Running async web server at {WebServer.site.name}&#34;)
+    self.started = True</code></pre>
 </details>
 </dd>
-<dt id="aiohttp_server.WebServer.shutdown"><code class="name flex">
-<span>async def <span class="ident">shutdown</span></span>(<span>request)</span>
+<dt id="aiohttp_server.WebServer.say"><code class="name flex">
+<span>async def <span class="ident">say</span></span>(<span>self, *args)</span>
 </code></dt>
 <dd>
 <div class="desc"></div>
@@ -1697,8 +2208,41 @@ async def redirect_handler(request):
 <summary>
 <span>Expand source code</span>
 </summary>
+<pre><code class="python">@helpers.register_name(&#34;say&#34;, HandlerRegistry)
+async def say(self, *args):
+    logger.info(f&#34;{&#39; &#39;.join(args)}&#34;)</code></pre>
+</details>
+</dd>
+<dt id="aiohttp_server.WebServer.shutdown"><code class="name flex">
+<span>async def <span class="ident">shutdown</span></span>(<span>request)</span>
+</code></dt>
+<dd>
+<div class="desc"><p>Shuts the engine down</p>
+<h2 id="args">Args</h2>
+<dl>
+<dt><strong><code>request</code></strong> :&ensp;<code>web.Request</code></dt>
+<dd>the original request</dd>
+</dl>
+<h2 id="raises">Raises</h2>
+<dl>
+<dt><code>GracefulExit</code></dt>
+<dd><em>description</em></dd>
+</dl></div>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
 <pre><code class="python">@routes.get(&#34;/shutdown&#34;)
 async def shutdown(request):
+    &#34;&#34;&#34;
+    Shuts the engine down
+
+    Args:
+        request (web.Request): the original request
+
+    Raises:
+        GracefulExit: _description_
+    &#34;&#34;&#34;
     logger.info(&#34;Shutting down now&#34;)
     raise GracefulExit()</code></pre>
 </details>
@@ -1707,13 +2251,34 @@ async def shutdown(request):
 <span>async def <span class="ident">update</span></span>(<span>request: aiohttp.web_request.Request)</span>
 </code></dt>
 <dd>
-<div class="desc"></div>
+<div class="desc"><p>Updates the api routes with a file
+TODO: need to do more safety checking</p>
+<h2 id="args">Args</h2>
+<dl>
+<dt><strong><code>request</code></strong> :&ensp;<code>web.Request</code></dt>
+<dd>the original request</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><code>_type_</code></dt>
+<dd><em>description</em></dd>
+</dl></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
 </summary>
 <pre><code class="python">@routes.get(&#34;/update&#34;)
 async def update(request:web.Request):
+    &#34;&#34;&#34;
+    Updates the api routes with a file
+    TODO: need to do more safety checking
+
+    Args:
+        request (web.Request): the original request
+
+    Returns:
+        _type_: _description_
+    &#34;&#34;&#34;
     # from api_ww38 import routes as new_routes
     to_import:dict = request.query
     to_import = to_import.get(&#34;file&#34;, &#34;api_ww38&#34;)
@@ -1730,19 +2295,38 @@ async def update(request:web.Request):
     spec.loader.exec_module(new_mod)
     new_routes = new_mod.routes
     added = WebServer.update_routes(new_routes)
-    return web.Response(text=&#34;Updated with {added} routes&#34;)</code></pre>
+    return web.Response(text=f&#34;Updated with {added} routes&#34;)</code></pre>
 </details>
 </dd>
 <dt id="aiohttp_server.WebServer.update_routes"><code class="name flex">
 <span>def <span class="ident">update_routes</span></span>(<span>new_routes: aiohttp.web_routedef.RouteTableDef)</span>
 </code></dt>
 <dd>
-<div class="desc"></div>
+<div class="desc"><p>adds the new routes to the current router object, unfreezes the router</p>
+<h2 id="args">Args</h2>
+<dl>
+<dt><strong><code>new_routes</code></strong> :&ensp;<code>web.RouteTableDef</code></dt>
+<dd>the routing table</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><code>_type_</code></dt>
+<dd><em>description</em></dd>
+</dl></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
 </summary>
 <pre><code class="python">def update_routes(new_routes: web.RouteTableDef):
+    &#34;&#34;&#34;
+    adds the new routes to the current router object, unfreezes the router
+
+    Args:
+        new_routes (web.RouteTableDef): the routing table
+
+    Returns:
+        _type_: _description_
+    &#34;&#34;&#34;
     WebServer.app.router._frozen = False
     routes_added = WebServer.app.router.add_routes(new_routes)
     WebServer.app.router._frozen = True
@@ -1753,13 +2337,34 @@ async def update(request:web.Request):
 <span>async def <span class="ident">websocket_handler</span></span>(<span>request)</span>
 </code></dt>
 <dd>
-<div class="desc"></div>
+<div class="desc"><p>Handles websocket requests
+useful for command control similar to command line</p>
+<h2 id="args">Args</h2>
+<dl>
+<dt><strong><code>request</code></strong> :&ensp;<code>web.Request</code></dt>
+<dd>the original request</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><code>_type_</code></dt>
+<dd><em>description</em></dd>
+</dl></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
 </summary>
 <pre><code class="python">@routes.get(&#34;/ws&#34;)
 async def websocket_handler(request):
+    &#34;&#34;&#34;
+    Handles websocket requests
+    useful for command control similar to command line
+
+    Args:
+        request (web.Request): the original request
+
+    Returns:
+        _type_: _description_
+    &#34;&#34;&#34;
     ws = web.WebSocketResponse()
     await ws.prepare(request)
     async for msg in ws:
@@ -1788,6 +2393,7 @@ async def websocket_handler(request):
 <ul id="index">
 <li><h3><a href="#header-functions">Functions</a></h3>
 <ul class="">
+<li><code><a title="aiohttp_server.client_decorator" href="#aiohttp_server.client_decorator">client_decorator</a></code></li>
 <li><code><a title="aiohttp_server.server_decorator" href="#aiohttp_server.server_decorator">server_decorator</a></code></li>
 </ul>
 </li>
@@ -1801,7 +2407,7 @@ async def websocket_handler(request):
 </li>
 <li>
 <h4><code><a title="aiohttp_server.WebClient" href="#aiohttp_server.WebClient">WebClient</a></code></h4>
-<ul class="two-column">
+<ul class="">
 <li><code><a title="aiohttp_server.WebClient.get_response" href="#aiohttp_server.WebClient.get_response">get_response</a></code></li>
 <li><code><a title="aiohttp_server.WebClient.new_session" href="#aiohttp_server.WebClient.new_session">new_session</a></code></li>
 <li><code><a title="aiohttp_server.WebClient.post_response" href="#aiohttp_server.WebClient.post_response">post_response</a></code></li>
@@ -1810,6 +2416,7 @@ async def websocket_handler(request):
 <li><code><a title="aiohttp_server.WebClient.send_check" href="#aiohttp_server.WebClient.send_check">send_check</a></code></li>
 <li><code><a title="aiohttp_server.WebClient.send_check_post" href="#aiohttp_server.WebClient.send_check_post">send_check_post</a></code></li>
 <li><code><a title="aiohttp_server.WebClient.send_check_put" href="#aiohttp_server.WebClient.send_check_put">send_check_put</a></code></li>
+<li><code><a title="aiohttp_server.WebClient.send_check_to_wrong_url" href="#aiohttp_server.WebClient.send_check_to_wrong_url">send_check_to_wrong_url</a></code></li>
 <li><code><a title="aiohttp_server.WebClient.send_command" href="#aiohttp_server.WebClient.send_command">send_command</a></code></li>
 <li><code><a title="aiohttp_server.WebClient.send_ping" href="#aiohttp_server.WebClient.send_ping">send_ping</a></code></li>
 <li><code><a title="aiohttp_server.WebClient.send_post" href="#aiohttp_server.WebClient.send_post">send_post</a></code></li>
@@ -1822,11 +2429,12 @@ async def websocket_handler(request):
 <li>
 <h4><code><a title="aiohttp_server.WebServer" href="#aiohttp_server.WebServer">WebServer</a></code></h4>
 <ul class="two-column">
+<li><code><a title="aiohttp_server.WebServer.build" href="#aiohttp_server.WebServer.build">build</a></code></li>
+<li><code><a title="aiohttp_server.WebServer.check2_put_response" href="#aiohttp_server.WebServer.check2_put_response">check2_put_response</a></code></li>
 <li><code><a title="aiohttp_server.WebServer.check_post_response" href="#aiohttp_server.WebServer.check_post_response">check_post_response</a></code></li>
 <li><code><a title="aiohttp_server.WebServer.check_put_response" href="#aiohttp_server.WebServer.check_put_response">check_put_response</a></code></li>
 <li><code><a title="aiohttp_server.WebServer.check_response" href="#aiohttp_server.WebServer.check_response">check_response</a></code></li>
 <li><code><a title="aiohttp_server.WebServer.command_handler" href="#aiohttp_server.WebServer.command_handler">command_handler</a></code></li>
-<li><code><a title="aiohttp_server.WebServer.create" href="#aiohttp_server.WebServer.create">create</a></code></li>
 <li><code><a title="aiohttp_server.WebServer.do_task" href="#aiohttp_server.WebServer.do_task">do_task</a></code></li>
 <li><code><a title="aiohttp_server.WebServer.do_xyz" href="#aiohttp_server.WebServer.do_xyz">do_xyz</a></code></li>
 <li><code><a title="aiohttp_server.WebServer.expected_put_params" href="#aiohttp_server.WebServer.expected_put_params">expected_put_params</a></code></li>
@@ -1846,6 +2454,7 @@ async def websocket_handler(request):
 <li><code><a title="aiohttp_server.WebServer.run_demo" href="#aiohttp_server.WebServer.run_demo">run_demo</a></code></li>
 <li><code><a title="aiohttp_server.WebServer.run_server" href="#aiohttp_server.WebServer.run_server">run_server</a></code></li>
 <li><code><a title="aiohttp_server.WebServer.running_tasks" href="#aiohttp_server.WebServer.running_tasks">running_tasks</a></code></li>
+<li><code><a title="aiohttp_server.WebServer.say" href="#aiohttp_server.WebServer.say">say</a></code></li>
 <li><code><a title="aiohttp_server.WebServer.shutdown" href="#aiohttp_server.WebServer.shutdown">shutdown</a></code></li>
 <li><code><a title="aiohttp_server.WebServer.site" href="#aiohttp_server.WebServer.site">site</a></code></li>
 <li><code><a title="aiohttp_server.WebServer.update" href="#aiohttp_server.WebServer.update">update</a></code></li>

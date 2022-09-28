@@ -1,7 +1,9 @@
 import collections
 import functools
 import inspect
+import json
 import logging
+import platform
 import sys
 import time
 import jsonschema
@@ -31,6 +33,28 @@ class Const:
         BlockDelete = r"(?i)Delete from"
         BlockSqlComment = r"--"
         Job_ID = r"^\d{6}_\d_\d_\d_\d{8}"
+
+
+def exception_decorator(func: Callable, logger: logging.Logger) -> Callable:
+    """
+    wraps a function in an exception handler to log that it failed
+
+    Args:
+        func (Callable): function to wrap
+
+    Returns:
+        Callable: wrapped function
+    """
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            ret = func(*args, **kwargs)
+            return ret
+        except Exception as e:
+            # logger.error(f"Method failed: {e}")
+            print(f"Method failed: {e}")
+            raise e
+    return wrapper
 
 
 def debug_decorator(func: Callable) -> Callable:
@@ -78,7 +102,7 @@ def debug_decorator(func: Callable) -> Callable:
     return wrapper
 
 
-def decorate_all_methods(decorator: Callable) -> Callable:
+def decorate_all_methods(decorator: Callable, *args, **kwargs) -> Callable:
     """
     Decorates all the methods in a class (includes static methods)
 
@@ -89,10 +113,27 @@ def decorate_all_methods(decorator: Callable) -> Callable:
         for attr in cls.__dict__:
             gattr = getattr(cls, attr)
             if callable(gattr):
-                setattr(cls, attr, decorator(gattr))
+                setattr(cls, attr, decorator(gattr, *args, **kwargs))
         return cls
     return decorate
 
+
+def client_decorator(func: Callable) -> Callable:
+    """
+    prints the return value, meant for server functions to see what data is being returned
+
+    Args:
+        func (Callable): function to wrap
+
+    Returns:
+        Callable: wrapped function
+    """
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        ret = func(*args, **kwargs)
+        print(func.__name__, "returned", f"{ret}")
+        return ret
+    return wrapper
 
 class RegexValidator():
     def validate(self, instance: dict or bool) -> dict:
@@ -153,7 +194,6 @@ def register_idx(idx: str, registry: set or list, default:Any = None) -> Callabl
         registry[idx] = func
         return func
     return _register
-
 
 class Schemas:
     _ExampleSchema = {
@@ -221,7 +261,6 @@ class Schemas:
             }
         }
     }
-
 
 
 def custom_schema_validation(instance: dict or bool, schema: dict) -> None:
@@ -341,9 +380,50 @@ class TailLogger(object):
 
 
 def generate_docs(d, file_str):
-    os.system(f"python -m pdoc --html --output-dir {d} {file_str}")
+    os.system(f"python -m pdoc --html --output-dir {d} {file_str} --force")
+
+
+def get_platform():
+    return str(platform.system()).lower()
+
+
+def resolve_ip(logger=None):
+    import socket
+    host = "proxy-chain.intel.com"
+    port = 911
+    try:
+        s = socket.socket()
+        s.settimeout(1)  # one second timeout so we don't hinder functionality
+        try:
+            s.connect(("intel.com", 80))  # website ip and port
+            return s.getsockname()[0]
+        except socket.timeout:
+            s.connect((host, port))
+        s.close()
+    except socket.error as socket_error:
+        try:
+            s.close()
+        except:
+            # socket doesn't exist so we can't close it. this is not a problem though
+            pass
+        try:
+            import subprocess
+            if "linux" in get_platform():
+                cmd = "hostname -i | awk '{print $1}'"
+            else:
+                cmd = "hostname -I | awk '{print $1}'"
+            ip = subprocess.check_output(cmd.split(' ')).decode("utf-8").lower().strip()
+            if ip.count('.') == 3:
+                return ip
+        except Exception as e:
+            msg = f"Error during ip acquisition: {e}, after {socket_error}"
+            write = logger.info if logger else print
+            write(msg)
+    # this may give us 127.0.0.1 on certain systems, or a virtualbox ip on others. neither are great but potentially functional
+    return socket.gethostbyname(socket.gethostname())
 
 
 if __name__ == "__main__":
-    generate_docs("docs/html", "aiohttp_server.py")
+    # generate_docs("docs/html", "aiohttp_server.py")
+    print(get_platform())
     print("This file is not meant to be run directly, rather imported from")
