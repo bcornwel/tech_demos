@@ -1,3 +1,4 @@
+import argparse
 import atexit
 import collections
 from concurrent.futures import as_completed, Future, ProcessPoolExecutor, ThreadPoolExecutor
@@ -13,20 +14,20 @@ from pathlib import Path, PurePosixPath
 import re
 import sys
 from types import ModuleType
-from typing import Callable, Tuple
+from typing import Any, Callable, Mapping, Sequence, Tuple
 
 
-_ExcInfoType = TypeAlias = None or bool or BaseException
+#region DEFINITIONS
 
 
 class Const:
     """
     Container for constant strings to be used throughout the code
     """
+    LogName = "healing.log"
     ErrorLogName = "errors.log"
     SummaryLogPostfix = "_summary.log"
 
-    LoopBackIP = "127.0.0.1"
     HttpProxy = "http://proxy-dmz.intel.com:911"
     HttpsProxy = "http://proxy-dmz.intel.com:912"
 
@@ -38,12 +39,19 @@ class Const:
         Schemas = "schemas"  # where schemas are stored
         Test = "_test"  # where test files are stored
         VirtualEnv = "env"  # folder for virtual environment data
+    
+    class FileNames:
+        ActionMap = "action_map.json"  # the file containing the errnames:action mapping
+        ErrorMap = "error_map.json"  # the file containing the syscheck errors:errnames mapping
+        HealingResults = "healing_results.json"  # the file containing results of the self-healing interventions
+        SysCheckResults = "result.log"  # the file containing the high level syscheck result data
+        ResultMap = "result_map.json"  # the file containing the test names:results mapping
 
     class Timeouts:
         """
         Default timeout values
         """
-        Response = 15
+        Response = 5
 
 
 class RegexStrings:
@@ -58,17 +66,244 @@ class RegexStrings:
     BlockDrop = r"(?i)Drop (index|constraint|table|column|primary|foreign|check|database|view)"
     BlockSqlComment = r"--"
     Directory = r"([a-zA-Z]:\\\\)|(\/|\\|\\\\){0,1}(\w+(\/|\\|\\\\))*\w+(\/|\\|\\\\)*"
-    Job_ID = r"(\d{6})_(\d)_(\d)_(\d)_(\d{20})"
     Numeric = r"(0-9)+\.*(0-9)+"
     PathLike = r"((?:[^;]*/)*)(.*)"
     PathTraversal = r"(/|\\|\\\\)\.\.(/|\\|\\\\)"
     PythonFile = r"([a-zA-Z]:){0,1}(/|\\|\\\\){0,1}(\w+(/|\\|\\\\))*\w+\.py"
-    SessionDir = r"([a-zA-Z]:){0,1}(/|\\|\\\\){0,1}(\w+(/|\\|\\\\))*session_\d{6}_\d{20}"
-    Session_ID = r"\d{6}_\d{20}"
+    SpaceDelimiter = r"[ ]{2,}"
     Tuple = r"[a-zA-Z0-9_\(\)\,]"
     Url = r"http(s){0,1}:\/\/(((([0-1]*[0-9]*[0-9]\.|2[0-5][0-5]\.){3})([0-1]*[0-9]*[0-9]|2[0-5][0-5])(:[0-9]{0,4}|[0-5][0-9]{4}|6[0-5][0-5][0-3][0-5])*)|((\d*[a-zA-Z][a-zA-Z0-9\.]*(\-*))+\.[a-zA-Z0-9]{1,3}))((/[\w\-\.]*)*(\?\w+=\w+)*)*"
     MarkdownLink = r"\[.*\]\(.*\)"
     Variable = r"[\w\. ]+"
+
+
+#endregion
+
+
+#region LOGGING
+
+
+def GetLogFormatter(standard=True) -> logging.Formatter:
+    """
+    Creates a logging.Formatter instance with log line decorations
+
+    Args:
+        standard (bool, optional): whether to use the standard format or the simple version. Defaults to True.
+
+    Returns:
+        logging.Formatter: The formatter to apply to a logging.Logger instance
+    """
+    class StandardFormatter(logging.Formatter):
+        def custom_formatting_method(string):
+            items = string.split("||")
+            items = items[:2] + [get_caller_name(10)] + items[2:]
+            return " || ".join(items)
+
+        def format(self, record):
+            default_formatted = logging.Formatter.format(self, record)
+            return StandardFormatter.custom_formatting_method(default_formatted)
+    
+    class SimpleFormatter(logging.Formatter):
+        def custom_formatting_method(string):
+            return " || ".join(string.split("||"))
+
+        def format(self, record):
+            default_formatted = logging.Formatter.format(self, record)
+            return SimpleFormatter.custom_formatting_method(default_formatted)
+
+    return StandardFormatter(f"%(asctime)s||%(levelname)5s||%(message)s") if standard else SimpleFormatter(f"%(asctime)s||%(message)s")
+
+
+class Logger():
+    """
+    This is a wrapper around the logging.Logger class which is used to insert calls for summary and error logging
+    """
+    def __init__(self, logger_instance):
+        self.instance: logging.Logger = logger_instance
+        self.handlers = self.instance.handlers
+        self.error_log = logging.getLogger(Const.ErrorLogName)
+        if not len(self.error_log.handlers):  # not already set up
+            file_handler = logging.FileHandler(Const.ErrorLogName)
+            file_handler.setLevel(logging.INFO)
+            file_handler.setFormatter(GetLogFormatter(standard=False))
+            self.error_log.addHandler(file_handler)
+        self.error_log.setLevel(logging.INFO)
+        self.instance.setLevel(logging.INFO)
+
+    def setLevel(self, level: int | str):
+        self.instance.setLevel(level)
+        for handler in self.instance.handlers:
+            handler.setLevel(level)
+
+    def addHandler(self, hdlr: logging.Handler) -> None:
+        return self.instance.addHandler(hdlr)
+
+    def info(self, msg: object, *args: object, exc_info: BaseException = None, stack_info: bool = False, extra: Mapping[str, object] | None = None) -> None:
+        return self.instance.info(msg, *args, exc_info=exc_info, stack_info=stack_info, extra=extra)
+    
+    def error(self, msg: object, *args: object, exc_info: BaseException = None, stack_info: bool = False, extra: Mapping[str, object] | None = None) -> None:
+        self.error_log.error(msg, *args, exc_info=exc_info, stack_info=stack_info, extra=extra)
+        return self.instance.error(msg, *args, exc_info=exc_info, stack_info=stack_info, extra=extra)
+    
+    def warn(self, msg: object, *args: object, exc_info: BaseException = None, stack_info: bool = False, extra: Mapping[str, object] | None = None) -> None:
+        return self.instance.warn(msg, *args, exc_info=exc_info, stack_info=stack_info, extra=extra)
+    
+    def warning(self, msg: object, *args: object, exc_info: BaseException = None, stack_info: bool = False, extra: Mapping[str, object] | None = None) -> None:
+        return self.instance.warning(msg, *args, exc_info=exc_info, stack_info=stack_info, extra=extra)
+    
+    def exception(self, msg: object, *args: object, exc_info: BaseException = None, stack_info: bool = False, extra: Mapping[str, object] | None = None) -> None:
+        self.error_log.exception(msg, *args, exc_info=exc_info, stack_info=stack_info, extra=extra)
+        return self.instance.exception(msg, *args, exc_info=exc_info, stack_info=stack_info, extra=extra)
+    
+    def debug(self, msg: object, *args: object, exc_info: BaseException = None, stack_info: bool = False, extra: Mapping[str, object] | None = None) -> None:
+        return self.instance.debug(msg, *args, exc_info=exc_info, stack_info=stack_info, extra=extra)
+    
+    def critical(self, msg: object, *args: object, exc_info: BaseException = None, stack_info: bool = False, extra: Mapping[str, object] | None = None) -> None:
+        return self.instance.critical(msg, *args, exc_info=exc_info, stack_info=stack_info, extra=extra)
+
+
+class ConsoleLogHandler(logging.StreamHandler):
+    """
+    Wrapper around StreamHandler to identify the handler in an existing logger instance
+    """
+    pass
+
+
+def GetConsoleLogHandler() -> logging.StreamHandler:
+    """
+    Creates a ConsoleLogHandler instance that wraps sys.stdout so the logger instance will print to the console as well as file
+
+    Returns:
+        logging.StreamHandler: the stream handler instance to add to the logging.Logger handlers
+    """
+    consoleHandler = ConsoleLogHandler(sys.stdout)
+    consoleHandler.setFormatter(GetLogFormatter())
+    return consoleHandler
+
+
+class TailLogHandler(logging.Handler):
+    """
+    A class that grabs log messages that come from logging.Logger if added to a logger instance's handlers
+    """
+    def __init__(self, log_queue):
+        logging.Handler.__init__(self)
+        self.log_queue = log_queue
+    
+
+    def emit(self, record:str):
+        """
+        a handler that kicks off anytime a log message goes through
+
+        Args:
+            record (str): a message to save
+        """
+        self.log_queue.append(self.format(record))
+
+
+class TailLogger(object):
+    """
+    Tail logger is the class that keeps a running buffer of log messages if applied to a logger
+
+    Args:
+        object (_type_): _description_
+    """
+    def __init__(self, maxlen):
+        self._log_queue = collections.deque(maxlen=maxlen)
+        self._log_handler = TailLogHandler(self._log_queue)
+
+    def contents(self) -> str:
+        """
+        returns the contents of the buffer
+
+        Returns:
+            str: the newline-joined list of log lines
+        """
+        return '\n'.join(self._log_queue)
+
+    @property
+    def log_handler(self):
+        """
+        property to contain the log handler
+
+        Returns:
+            TailLogHandler: the log handler
+        """
+        return self._log_handler
+
+
+def get_tail_logger(logger:Logger | logging.Logger, format=True, max_lines=100) -> TailLogger:
+    """
+    Applies tail handler with optional formatting to a logging.Logger instance
+    probably shouldn't be called by anyone other than get_log
+
+    Args:
+        logger (Logger or logging.Logger): the logger instance
+        format (bool, optional): whether or not to apply formatting. Defaults to True.
+        max_lines (int, optional): how many lines to keep in the buffer. Defaults to 100.
+
+    Returns:
+        TailLogger: the captured buffer which contains the last n lines
+    """
+    buffer = TailLogger(max_lines)
+    log_handler = buffer.log_handler
+    logger.addHandler(log_handler)
+    if format:
+        log_handler.setFormatter(GetLogFormatter())
+    
+    return buffer
+
+
+def get_log(logger:Logger | logging.Logger=None, log_name:str=Const.LogName, log_level:int | str=None, format:bool=True, get_tail=False, max_lines:int=100) -> Logger | Tuple[Logger, TailLogger]:
+    """
+    Gets the universal logging instance
+
+    if you want to get a different log, then you need to pass a different log_name parameter, e.g. get_log(log_name=f"{__file__}.log")
+
+    Args:
+        logger (Logger or logging.Logger, optional): the logger instance if there already is one, will format it. Defaults to None.
+        log_name (str, optional): the expected name of the log file. Defaults to Const.LogName.
+        log_level (int or str, optional): the level at which to allow lines to be written. Defaults to None.
+        format (bool, optional): whether or not to set the format of the log. Defaults to True.
+        get_tail (bool, optional): whether or not to return the log line buffer. Defaults to False.
+        max_lines (int, optional): how many lines to keep buffered, useful for services to display logs. Defaults to 100.
+
+    Returns:
+        Logger or Tuple[Logger, TailLogger]: the logger and optionally the log buffer
+    """
+    logger = Logger(logger if logger else logging.getLogger(log_name))
+    # if not len(logger.handlers):  # not already set up
+    #     file_handler = logging.FileHandler(log_name)
+    #     file_handler.setLevel(log_level if log_level else logging.INFO)
+    #     if format:
+    #         file_handler.setFormatter(GetLogFormatter())
+    #     logger.addHandler(file_handler)
+    if not any(isinstance(handler, ConsoleLogHandler) for handler in logger.handlers):
+        console_handler = GetConsoleLogHandler()
+        if format:
+            console_handler.setFormatter(GetLogFormatter())
+            console_handler.setLevel(log_level if log_level else logging.INFO)
+        logger.addHandler(console_handler)
+    if not any(isinstance(handler, RotatingFileHandler) for handler in logger.handlers):
+        rotating_log_handler = RotatingFileHandler(log_name, maxBytes=10_000_000, backupCount=10,)
+        if format:
+            rotating_log_handler.setFormatter(GetLogFormatter())
+        rotating_log_handler.setLevel(log_level if log_level else logging.INFO)
+        logger.addHandler(rotating_log_handler)
+    if log_level:
+        logger.setLevel(log_level)
+    ResourceManager._assign_logger(logger)
+    if not get_tail:
+        return logger
+    else:
+        tail = get_tail_logger(logger, format=format, max_lines=max_lines)
+        return logger, tail
+
+
+#endregion
+
+
+
+#region UTILITIES
 
 
 def get_project_root(as_str=False) -> Path:
@@ -333,186 +568,25 @@ def get_caller_name(layers:int=1):
         return f"Running {func_name}"
 
 
-def GetLogFormatter(standard=True) -> logging.Formatter:
+def str_to_log_level(s_lvl:str) -> int:
     """
-    Creates a logging.Formatter instance with log line decorations
+    Converts a logging string name to level e.g. INFO to logging.INFO
 
     Args:
-        standard (bool, optional): whether to use the standard format or the simple version. Defaults to True.
+        s_lvl (str): a string name e.g. INFO
+
+    Raises:
+        Exception: unable to find the log level
 
     Returns:
-        logging.Formatter: The formatter to apply to a logging.Logger instance
+        int: the logging level
     """
-    class StandardFormatter(logging.Formatter):
-        def custom_formatting_method(string):
-            items = string.split("||")
-            items = items[:2] + [get_caller_name(10)] + items[2:]
-            return " || ".join(items)
-
-        def format(self, record):
-            default_formatted = logging.Formatter.format(self, record)
-            return StandardFormatter.custom_formatting_method(default_formatted)
-    
-    class SimpleFormatter(logging.Formatter):
-        def custom_formatting_method(string):
-            return " || ".join(string.split("||"))
-
-        def format(self, record):
-            default_formatted = logging.Formatter.format(self, record)
-            return SimpleFormatter.custom_formatting_method(default_formatted)
-
-    return StandardFormatter(f"%(asctime)s||%(levelname)5s||%(message)s") if standard else SimpleFormatter(f"%(asctime)s||%(message)s")
-
-
-class Logger():
-    """
-    This is a wrapper around the logging.Logger class which is used to insert calls for summary and error logging
-    """
-    def __init__(self, logger_instance):
-        self.instance: logging.Logger = logger_instance
-        self.handlers = self.instance.handlers
-        self.error_log = logging.getLogger(Const.ErrorLogName)
-        if not len(self.error_log.handlers):  # not already set up
-            file_handler = logging.FileHandler(Const.ErrorLogName)
-            file_handler.setLevel(logging.INFO)
-            file_handler.setFormatter(GetLogFormatter(standard=False))
-            self.error_log.addHandler(file_handler)
-        self.error_log.setLevel(logging.INFO)
-        self.session_logs = {}
-
-    def setLevel(self, level: int | str):
-        self.instance.setLevel(level)
-        for handler in self.instance.handlers:
-            handler.setLevel(level)
-
-    def addHandler(self, hdlr: logging.Handler) -> None:
-        return self.instance.addHandler(hdlr)
-
-    def info(self, msg: object, *args: object, exc_info: _ExcInfoType = None, stack_info: bool = False, extra: Mapping[str, object] or None = None) -> None:
-        return self.instance.info(msg, *args, exc_info=exc_info, stack_info=stack_info, extra=extra)
-    
-    def error(self, msg: object, *args: object, exc_info: _ExcInfoType = None, stack_info: bool = False, extra: Mapping[str, object] or None = None) -> None:
-        self.error_log.error(msg, *args, exc_info=exc_info, stack_info=stack_info, extra=extra)
-        return self.instance.error(msg, *args, exc_info=exc_info, stack_info=stack_info, extra=extra)
-    
-    def warn(self, msg: object, *args: object, exc_info: _ExcInfoType = None, stack_info: bool = False, extra: Mapping[str, object] or None = None) -> None:
-        return self.instance.warn(msg, *args, exc_info=exc_info, stack_info=stack_info, extra=extra)
-    
-    def warning(self, msg: object, *args: object, exc_info: _ExcInfoType = None, stack_info: bool = False, extra: Mapping[str, object] or None = None) -> None:
-        return self.instance.warning(msg, *args, exc_info=exc_info, stack_info=stack_info, extra=extra)
-    
-    def exception(self, msg: object, *args: object, exc_info: _ExcInfoType = None, stack_info: bool = False, extra: Mapping[str, object] or None = None) -> None:
-        self.error_log.exception(msg, *args, exc_info=exc_info, stack_info=stack_info, extra=extra)
-        return self.instance.exception(msg, *args, exc_info=exc_info, stack_info=stack_info, extra=extra)
-    
-    def debug(self, msg: object, *args: object, exc_info: _ExcInfoType = None, stack_info: bool = False, extra: Mapping[str, object] or None = None) -> None:
-        return self.instance.debug(msg, *args, exc_info=exc_info, stack_info=stack_info, extra=extra)
-    
-    def critical(self, msg: object, *args: object, exc_info: _ExcInfoType = None, stack_info: bool = False, extra: Mapping[str, object] or None = None) -> None:
-        return self.instance.critical(msg, *args, exc_info=exc_info, stack_info=stack_info, extra=extra)
-
-    def summary(self, msg: object, session_id:str, *args: object, exc_info: _ExcInfoType = None, stack_info: bool = False, extra: Mapping[str, object] or None = None) -> None:
-        if session_id not in self.session_logs:
-            session_log_name = f"{session_id}{Const.SummaryLogPostfix}"
-            self.session_logs[session_id] = logging.getLogger(session_log_name)
-            file_handler = logging.FileHandler(session_log_name)
-            file_handler.setLevel(logging.INFO)
-            file_handler.setFormatter(GetLogFormatter(standard=False))
-            self.session_logs[session_id].addHandler(file_handler)
-            self.session_logs[session_id].setLevel(logging.INFO)
-        self.session_logs[session_id].info(msg, *args, exc_info=exc_info, stack_info=stack_info, extra=extra)
-        return self.instance.info(msg, *args, exc_info=exc_info, stack_info=stack_info, extra=extra)
-
-
-class ConsoleLogHandler(logging.StreamHandler):
-    """
-    Wrapper around StreamHandler to identify the handler in an existing logger instance
-    """
-    pass
-
-
-def GetConsoleLogHandler() -> logging.StreamHandler:
-    """
-    Creates a ConsoleLogHandler instance that wraps sys.stdout so the logger instance will print to the console as well as file
-
-    Returns:
-        logging.StreamHandler: the stream handler instance to add to the logging.Logger handlers
-    """
-    consoleHandler = ConsoleLogHandler(sys.stdout)
-    consoleHandler.setFormatter(GetLogFormatter())
-    return consoleHandler
-
-
-class TailLogHandler(logging.Handler):
-    """
-    A class that grabs log messages that come from logging.Logger if added to a logger instance's handlers
-    """
-    def __init__(self, log_queue):
-        logging.Handler.__init__(self)
-        self.log_queue = log_queue
-    
-
-    def emit(self, record:str):
-        """
-        a handler that kicks off anytime a log message goes through
-
-        Args:
-            record (str): a message to save
-        """
-        self.log_queue.append(self.format(record))
-
-
-class TailLogger(object):
-    """
-    Tail logger is the class that keeps a running buffer of log messages if applied to a logger
-
-    Args:
-        object (_type_): _description_
-    """
-    def __init__(self, maxlen):
-        self._log_queue = collections.deque(maxlen=maxlen)
-        self._log_handler = TailLogHandler(self._log_queue)
-
-    def contents(self) -> str:
-        """
-        returns the contents of the buffer
-
-        Returns:
-            str: the newline-joined list of log lines
-        """
-        return '\n'.join(self._log_queue)
-
-    @property
-    def log_handler(self):
-        """
-        property to contain the log handler
-
-        Returns:
-            TailLogHandler: the log handler
-        """
-        return self._log_handler
-
-
-def get_tail_logger(logger:Logger | logging.Logger, format=True, max_lines=100) -> TailLogger:
-    """
-    Applies tail handler with optional formatting to a logging.Logger instance
-    probably shouldn't be called by anyone other than get_mars_log
-
-    Args:
-        logger (Logger or logging.Logger): the logger instance
-        format (bool, optional): whether or not to apply the MARS-style formatting. Defaults to True.
-        max_lines (int, optional): how many lines to keep in the buffer. Defaults to 100.
-
-    Returns:
-        TailLogger: the captured buffer which contains the last n lines
-    """
-    buffer = TailLogger(max_lines)
-    log_handler = buffer.log_handler
-    logger.addHandler(log_handler)
-    if format:
-        log_handler.setFormatter(GetLogFormatter())
-    
-    return buffer
+    try:
+        return logging._nameToLevel[s_lvl]
+    except Exception as conversion_exception:
+        msg = f"Unable to find log level from name '{s_lvl}'"
+        logging.getLogger(Const.LogName).error(msg, stack_info=True)
+        raise Exception(msg)
 
 
 class ThreadExecutor(ThreadPoolExecutor):
@@ -638,7 +712,6 @@ class ResourceManager:
     planned future support includes
         - analyzing system resources/capabilities
         - intelligently managing threads/processes
-        - distributing jobs between instances of services
     """
     def __init__(self) -> None:
         self.running = True
@@ -652,7 +725,7 @@ class ResourceManager:
         assigns a log object to the resource manager and sub executors
 
         Args:
-            log (Logger): the log obtained by get_mars_log()
+            log (Logger): the log obtained by get_log()
         """
         self.log = self.log or log
         self.thread_executor.log = self.log
@@ -698,91 +771,45 @@ class ResourceManager:
 ResourceManager = ResourceManager()
 
 
-def get_mars_log(logger:Logger | logging.Logger=None, log_name:str=Const.MarsLogName, log_level:int | str=None, format:bool=True, get_tail=False, max_lines:int=100) -> Logger | Tuple[Logger, TailLogger]:
-    """
-    Gets the universal mars logging instance
+# class Schemas(dict):
+#     """
+#     Consolidates schema data
 
-    if you want to get a different log, then you need to pass a different log_name parameter, e.g. get_mars_log(log_name=f"{__file__}.log")
-
-    Args:
-        logger (Logger or logging.Logger, optional): the logger instance if there already is one, will format it. Defaults to None.
-        log_name (str, optional): the expected name of the log file. Defaults to Const.MarsLogName.
-        log_level (int or str, optional): the level at which to allow lines to be written. Defaults to None.
-        format (bool, optional): whether or not to set the format of the log to the MARS style log lines. Defaults to True.
-        get_tail (bool, optional): whether or not to return the log line buffer. Defaults to False.
-        max_lines (int, optional): how many lines to keep buffered, useful for services to display logs. Defaults to 100.
-
-    Returns:
-        Logger or Tuple[Logger, TailLogger]: the logger and optionally the log buffer
-    """
-    logger = Logger(logger if logger else logging.getLogger(log_name))
-    # if not len(logger.handlers):  # not already set up
-    #     file_handler = logging.FileHandler(log_name)
-    #     file_handler.setLevel(log_level if log_level else logging.INFO)
-    #     if format:
-    #         file_handler.setFormatter(GetLogFormatter())
-    #     logger.addHandler(file_handler)
-    if not any(isinstance(handler, ConsoleLogHandler) for handler in logger.handlers):
-        console_handler = GetConsoleLogHandler()
-        if format:
-            console_handler.setFormatter(GetLogFormatter())
-            console_handler.setLevel(log_level if log_level else logging.INFO)
-        logger.addHandler(console_handler)
-    if not any(isinstance(handler, RotatingFileHandler) for handler in logger.handlers):
-        rotating_log_handler = RotatingFileHandler(log_name, maxBytes=10_000_000, backupCount=10,)
-        if format:
-            rotating_log_handler.setFormatter(GetLogFormatter())
-        rotating_log_handler.setLevel(log_level if log_level else logging.INFO)
-        logger.addHandler(rotating_log_handler)
-    if log_level:
-        logger.setLevel(log_level)
-    ResourceManager._assign_logger(logger)
-    if not get_tail:
-        return logger
-    else:
-        tail = get_tail_logger(logger, format=format, max_lines=max_lines)
-        return logger, tail
+#     builds an object capable of access via field access or dict item access regardless of extension
+#     the following examples all load the same schema
+#     Schemas.example_schema
+#     Schemas.example_schema.json
+#     Schemas["example_schema"]
+#     Schemas["example_schema.json"]
+#     """
+#     def __init__(self):
+#         log = get_log()
+#         self.all_schemas = []
+#         schema_path = safe_path(os.path.join(get_project_root(), Const.Directories.Schemas))
+#         schema_paths = [schema_path]
+#         project_path = safe_path(os.path.join(get_project_root(), Const.Directories.Schemas))
+#         if os.path.exists(project_path):
+#             schema_paths.append(project_path)
+#         for path in schema_paths:
+#             for file in path.iterdir():
+#                 if file.name.endswith(".py"):
+#                     schema = import_module_from_path(file).schema
+#                 elif file.name.endswith(".json"):
+#                     with open(file, 'r') as schema:
+#                         schema = json.loads(schema.read())
+#                 else:
+#                     if "__pycache__" not in f"{file}":
+#                         log.warn(f"Skipping non-functional file in schema dir: '{file}'")
+#                 jsonschema.Draft202012Validator.check_schema(schema)
+#                 schema_file = os.path.basename(file.name)
+#                 self[schema_file] = schema
+#                 no_ext = os.path.splitext(schema_file)[0]
+#                 self[no_ext] = schema
+#                 self.__setattr__(no_ext, schema)
+#                 self.all_schemas.append(no_ext)
 
 
-class Schemas(dict):
-    """
-    Consolidates schema data
-
-    builds an object capable of access via field access or dict item access regardless of extension
-    the following examples all load the same schema
-    Schemas.example_schema
-    Schemas.example_schema.json
-    Schemas["example_schema"]
-    Schemas["example_schema.json"]
-    """
-    def __init__(self):
-        log = get_mars_log()
-        self.all_schemas = []
-        schema_path = safe_path(os.path.join(get_project_root(), Const.Directories.Schemas))
-        schema_paths = [schema_path]
-        project_path = safe_path(os.path.join(get_project_root(), Const.Directories.Schemas))
-        if os.path.exists(project_path):
-            schema_paths.append(project_path)
-        for path in schema_paths:
-            for file in path.iterdir():
-                if file.name.endswith(".py"):
-                    schema = import_module_from_path(file).schema
-                elif file.name.endswith(".json"):
-                    with open(file, 'r') as schema:
-                        schema = json.loads(schema.read())
-                else:
-                    if "__pycache__" not in f"{file}":
-                        log.warn(f"Skipping non-functional file in schema dir: '{file}'")
-                jsonschema.Draft202012Validator.check_schema(schema)
-                schema_file = os.path.basename(file.name)
-                self[schema_file] = schema
-                no_ext = os.path.splitext(schema_file)[0]
-                self[no_ext] = schema
-                self.__setattr__(no_ext, schema)
-                self.all_schemas.append(no_ext)
-
-
-Schemas = Schemas()
+# Schemas = Schemas()
 
 
 def sanitize(data:str, regex_string=RegexStrings.AlphaNumeric, double_dash_exempt:bool=False) -> bool:
@@ -804,12 +831,12 @@ def sanitize(data:str, regex_string=RegexStrings.AlphaNumeric, double_dash_exemp
     return match and not block_drop and not block_sql and not block_delete
 
 
-def sanitize_json(instance: dict | bool | list | str) -> bool:
+def sanitize_dict(instance: dict | bool | list | str) -> bool:
     """
     Sanitizes an instance using the sanitation functionality
 
     Args:
-        instance (dictorbool): an object to check, should be json-ish
+        instance (dictorbool): an object to check, should be json/dict-ish
 
     Returns:
         bool: true if data is valid
@@ -821,10 +848,12 @@ def sanitize_json(instance: dict | bool | list | str) -> bool:
                     raise jsonschema.ValidationError(f"Key {k} is not sanitary!")
                 if not sanitize(f"{v}", RegexStrings.PathLike):  # allow anything that's allowed in a path in a variable
                     raise jsonschema.ValidationError(f"dict val {v} is not sanitary!")
+                sub_sanitize(v)
         elif isinstance(sub_instance, list):
             for item in sub_instance:
                 if not sanitize(f"{item}", RegexStrings.PathLike):  # allow anything that's allowed in a path in a variable
                     raise jsonschema.ValidationError(f"list item {item} is not sanitary!")
+                sub_sanitize(item)
         else:
             if not sanitize(f"{sub_instance}", RegexStrings.PathLike):  # allow anything that's allowed in a path in a variable
                 raise jsonschema.ValidationError(f"Value {sub_instance} is not sanitary!")
@@ -897,7 +926,7 @@ def load_json_file_2_dict(json_file: str | Path, comment_remove: bool=True, expa
     Args:
         json_file: input json file
         comment_remove: remove all the comment from the given JSON file
-        expand_path: whether to expand path variables such as %%MARS_DIR%% to their proper paths
+        expand_path: whether to expand path variables such as %%HEALING_DIR%% to their proper paths
         fix: whether to attempt to fix broken json
         log: log used to report any failures
 
@@ -905,13 +934,13 @@ def load_json_file_2_dict(json_file: str | Path, comment_remove: bool=True, expa
         dict: a dictionary generated from the json file
     """
     try:
-        get_mars_log().debug(f"Loading json file {json_file}")
+        get_log().debug(f"Loading json file {json_file}")
         with open(json_file, 'r', encoding="utf-8") as f:
             line = re.sub(u'[\u201c\u201d]', '"', f.read())  # read and convert all the fancy quotes to neutral quotes
             line = re.sub(u'[\u2018\u2019]', "\'", line)  # read and convert all the open/close quotes to neutral quotes
             # if comment_remove:
             #     line = remove_comments(line)
-            return json.loads(line) #if not expand_path else expand_mars_path_vars(json.loads(line))
+            return json.loads(line) #if not expand_path else expand_path_vars(json.loads(line))
     except json.decoder.JSONDecodeError as ex_data:
         # if fix:
         #     return fix_json_decode_error(line, ex_data, expand_path, log=log)
@@ -944,7 +973,7 @@ def load_json(to_load: str | dict | Path) -> dict:
     elif isinstance(to_load, str) and '{' in to_load:
         json_data = json.loads(to_load)
     try:
-        is_sanitized = sanitize_json(json_data) # FIXME add back in after fixing RegExStr to use for keys
+        is_sanitized = sanitize_dict(json_data) # FIXME add back in after fixing RegExStr to use for keys
     except Exception as sanitization_exe:
         return {}
     if is_sanitized:
@@ -953,11 +982,532 @@ def load_json(to_load: str | dict | Path) -> dict:
         return {}
 
 
-if __name__ == "__main__":
-    # parse cfg files - load_json_file_2_dict
-    # load the syscheck results - need custom parser 
+def load_space_delimited_file(to_load: str | Path, headers=None, header_line=0) -> dict:
+    """
+    Loads space delimited data by loading the file from the given path.
+    Performs a sanitization check the dict once it has been loaded.
+    Args:
+        to_load: the path to load the file from
+        headers: optional headers in which case don't auto-generate the header info from the file
+        header_line: the line number which contains the headers for the data in the file
+
+    Returns:
+        dict: a loaded and sanitized dict if the sanitization check indicates the loaded data is valid otherwise returns an empty dictionary
+    """
+    content = open(to_load, 'r').readlines()
+    table = dict()
+    if not headers:
+        header_row = re.split(RegexStrings.SpaceDelimiter, content[header_line])
+        header_count = len(header_row)
+        headers = header_row[1:]
+    else:
+        header_count = len(headers+1) 
+    for i, row in enumerate(content[header_line:]):
+        if row.strip() == '':
+            continue
+        row_data = re.split(RegexStrings.SpaceDelimiter, row)
+        assert header_count == len(row_data), f"Data in row {i} of file {to_load} does not match headers"
+        table[row_data[0]] = {k: v for k,v in zip(headers, row_data[1:])}
+    return table if sanitize_dict(table) else {}  # TODO: validate schema if one is available
+
+
+#endregion
+
+
+#region ARGS
+
+
+class ArgNames:
+    """
+    Collection of arg names to be used by ArgOptions
+    e.g. ArgOptions[ArgNames.config]
+    """
+    log_level = "log_level"
+    output = "output"  # output directory
+    results = "results"  # syscheck results
+    test_mode = "test_mode"
+    version = "version"
+
+
+class ArgOption:
+    """
+    Contains a grouping of argparse options
+    options include 
+    self.long -> long_name
+    self.short -> short_name
+    self.alternative -> alternative_name
+    self.base_args -> [long_name, short_name, alternative_name]
+    self.args -> [--long_name, -short_name, --alternative_name]
+    """
+    def __init__(self, long: str, short: str=None, alternative: str=None, default=None):
+        self.long = long.strip('-')
+        self.short = short.strip('-') if short else short
+        self.alternative = alternative.strip('-') if alternative else alternative
+        self.base_args = [o for o in [self.long, self.alternative, self.short] if o is not None]
+        arg_len = len(self.base_args)
+        set_len = len(set(self.base_args))
+        assert arg_len == set_len, f"Argument options contains {arg_len-set_len} duplicate(s) in '{self.base_args}'"
+        self.args = [f"--{self.long}"]
+        if self.short:
+            self.args.append(f"-{self.short}")
+        if alternative:
+            self.args.append(f"--{self.alternative}")
+        self.default = default
+
+    def get_options(self) -> Sequence[str]:
+        """
+        returns the options in a friendly way
+
+        Returns:
+            Sequence[str]: the list of options
+        """
+        return self.base_args
+
+    def __iter__(self):
+        return (i for i in self.args)  # return the members that are not empty
+    
+    def __str__(self):
+        return f"{self.long}: --{self.long}, -{self.short} or --{self.alternative}"
+
+
+class ArgOptions(dict):
+    """
+    Contains the grouping of argoption objects
+    """
+    def __init__(self):
+        options = [
+            ArgOption(ArgNames.log_level, 'l', "log", default=logging.INFO),
+            ArgOption(ArgNames.output, 'o', "output_dir", default=get_current_time_string_path_friendly()),
+            ArgOption(ArgNames.results, 'r'),
+            ArgOption(ArgNames.test_mode, default=False),
+            ArgOption(ArgNames.version, 'v', "ver"),
+        ]
+        for option in options:
+            setattr(self, option.long, option)  # set attribute so self.ip => ArgOption("ip"), etc.
+            self[option.long] = option  # set dict reference so self["ip"] => ArgOption("ip"), etc.
+    
+    def list_option_names(self, display:bool=False) -> Sequence[str]:
+        """
+        lists all available options
+
+        Args:
+            display (bool, optional): whether or not to print the list. Defaults to False.
+
+        Returns:
+            Sequence[str]: the list of option strings
+        """
+        if display:
+            print('\n'.join(self.keys()))
+        return list(self.keys())
+    
+    def items(self) -> dict:
+        """
+        returns a dict with arg option names and their default values (for when no args are passed)
+
+        Returns:
+            dict[str, Any]: dict of arg options and their defaults
+        """
+        items = super().items()
+        to_return = dict()
+        for k, v in items:
+            to_return[k] = v.default
+        return to_return
+
+
+ArgOptions = ArgOptions()
+
+
+class Namespace():
+    """
+    This is a wrapper around the argparse Namespace that allows args to be looked up easier
+    """
+    def __init__(self, instance: argparse.Namespace) -> None:
+        self.__class__ = type(instance.__class__.__name__,
+                              (self.__class__, instance.__class__),
+                              {})
+        self.__dict__ = instance.__dict__
+    
+    def merge(self, instance: argparse.Namespace):
+        """
+        merges two Namespace objects, used when adding manager parsers to the service parser
+
+        Args:
+            instance (argparse.Namespace): the namespace to add to this instance
+
+        Returns:
+            Namespace: this instance merged with the other on top
+        """
+        self.__dict__.update(instance.__dict__)
+        return self
+
+    def __getitem__(self, item):
+        return getattr(self, item)
+    
+    def keys(self) -> Sequence[str]:
+        """
+        returns the keys in a list
+
+        Returns:
+            Sequence[str]: the keys
+        """
+        return self.__dict__.keys()
+    
+    def values(self) -> Sequence[Any]:
+        """
+        returns the values in a list
+
+        Returns:
+            Sequence[Any]: the values
+        """
+        return self.__dict__.values()
+
+    def items(self) -> Sequence[Tuple[str, Any]]:
+        """
+        returns the items as key value pairs
+
+        Returns:
+            _type_: the ley value pairs
+        """
+        return self.__dict__.items()
+    
+    def print_args(self, to_log:bool=False, pretty:bool=False) -> None | dict | str:
+        """
+        Prints or returns a structure containing the arguments and their values
+
+        Args:
+            to_log (bool, optional): whether or not to print to the log instead of returning the dict. Defaults to False.
+            pretty (bool, optional): Whether or not to format nicer than a dictionary, will return a string. Defaults to False.
+
+        Returns:
+            None or str or dict: None if to_log, str if pretty, otherwise a dict
+        """
+        args = vars(self)
+        if pretty:
+            pretty_args = ""
+            longest_key = 0
+            longest_val = 0
+            for key, val in args.items():
+                longest_key = max(longest_key, len(key))
+                longest_val = max(longest_val, len(str(val)))
+            for key, val in args.items():
+                pretty_args += f"\n{key.ljust(longest_key)} | {str(val).ljust(longest_val)}"
+            header = f"{'Name'.ljust(longest_key)} | {'Value'.ljust(longest_val)}"
+            args = f"{header}\n{'-'*len(header)}{pretty_args}"
+        if to_log:
+            get_log().info(str(args))
+        else:
+            return args
+
+
+class ArgumentParser(argparse.ArgumentParser):
+    """
+    Override class to properly handle errors
+    """
+    def __init__(self, *args, **kwargs) -> None:
+        if kwargs.get("parents", None) is None or not kwargs.get("conflict_handler", None):
+            raise Exception("ArgumentParsers should have 'parents' and 'conflict_handler' in the argument list")
+        super().__init__(*args, **kwargs)
+
+
+    def error(self, message):
+        """
+        error handler, overrides the fatal exit
+
+        Args:
+            message (str): error message
+
+        Raises:
+            Exception: failure to parse
+        """
+        raise Exception(message)
+    
+    def add_argument(self, *name_or_flags:Any, **kwargs: Any) -> argparse.Action:
+        """
+        adds an arg to be able to be parsed
+        """
+        try:
+            return super().add_argument(*name_or_flags, **kwargs)
+        except TypeError as type_exception:
+            if "'ArgOption' object is not subscriptable" in f"{type_exception}":
+                try:
+                    e_info = sys.exc_info()[2].tb_next.tb_frame.f_back.f_back
+                    file_name = e_info.f_code.co_filename
+                    line = e_info.f_lineno
+                except:
+                    raise Exception(f"It appears you entered <parser>.add_argument(ArgOptions.<option> but you need to unpack the ArgOption e.g. *ArgOptions.<option> instead of ArgOptions.<option>") from type_exception
+                raise Exception(f"It appears you entered <parser>.add_argument(ArgOptions.<option> on line {line} of {os.path.relpath(file_name)} but you need to unpack the ArgOption e.g. *ArgOptions.<option> instead of ArgOptions.<option>") from type_exception
+            else:
+                raise type_exception
+
+
+class CustomArgHelperAction(argparse.Action):
+    """
+    Class to provide custom arg helpers
+
+    Create a class that inherits from this class, and override the __call__ function with your custom code
+    """
+    def __init__(self, option_strings, dest, default=False, required=False, help=None, nargs=0) -> None:
+            super().__init__(option_strings=option_strings, dest=dest, const=True, default=default, required=required, help=help, nargs=nargs)
+
+
+class ArgHelperActions:
+    """
+    Grouping of helper functions for parsers to leverage
+    These can convert data, or simply check it's in good form
+    """
+    def log_level(l:str) -> int:
+        """
+        determines if the arg is a valid log level
+
+        Args:
+            l (str): the arg
+
+        Raises:
+            argparse.ArgumentTypeError: if it's not valid
+
+        Returns:
+            int: the logging log level equivalent
+        """
+        try:
+            return str_to_log_level(l.upper())
+        except Exception as not_log_level_exception:
+            raise argparse.ArgumentTypeError(f"Log Level '{l}' is not a valid log level. Valid levels are: ERROR, WARN, INFO, DEBUG")
+    
+    def venv_dir(d: str) -> str:
+        """
+        determines if a directory is valid for a virtualenv dir
+
+        Args:
+            d (str): directory to check
+
+        Raises:
+            argparse.ArgumentTypeError: if it's not valid
+
+        Returns:
+            str: the directory in a safe form
+        """
+        new_d = safe_path(d, False)
+        if os.path.exists(new_d):
+            if os.access(os.path.dirname(new_d), os.W_OK):
+                return new_d
+            else:
+                raise argparse.ArgumentTypeError(f"Virtualenv directory '{d}' is not a valid writeable path")
+        else:
+            root_d = os.path.split(new_d)[0]
+            if root_d != new_d:
+                if os.path.exists(root_d):
+                    if os.access(os.path.dirname(root_d), os.W_OK):
+                        return new_d
+                    else:
+                        raise argparse.ArgumentTypeError(f"Virtualenv directory '{d}' is not a valid writeable path")
+                else:
+                    return new_d
+            else:
+                return new_d
+
+    def writeable_dir(d: str) -> str:
+        """
+        determines if a directory is valid
+
+        Args:
+            d (str): directory to check
+
+        Raises:
+            argparse.ArgumentTypeError: if it's not valid
+
+        Returns:
+            str: the directory in a safe form
+        """
+        new_d = safe_path(d, False)
+        if os.access(os.path.dirname(new_d), os.W_OK):
+            return new_d
+        else:
+            raise argparse.ArgumentTypeError(f"Directory '{d}' is not a valid writeable path")
+
+    def readable_dir(d: str) -> str:
+        """
+        checks if a directory is readable
+
+        Args:
+            d (str): the directory to check
+
+        Raises:
+            argparse.ArgumentTypeError: if it's not valid
+
+        Returns:
+            str: the directory in a safe form
+        """
+        new_d = safe_path(d, False)
+        if os.access(os.path.dirname(new_d), os.R_OK):
+            return new_d
+        else:
+            raise argparse.ArgumentTypeError(f"Directory '{d}' is not a valid readable path")
+
+    def readable_file(f: str) -> str:
+        """
+        Checks if a file is readable
+
+        Args:
+            f (str): the file path
+
+        Raises:
+            argparse.ArgumentTypeError: if it's not valid
+
+        Returns:
+            str: the file in a safe form
+        """
+        new_f = safe_path(f, False)
+        if os.access(new_f, os.R_OK):
+            return new_f
+        else:
+            raise argparse.ArgumentTypeError(f"Directory '{f}' is not a valid readable path")
+
+ 
+STANDARD_PARSER = ArgumentParser(description="Self-Healing arguments", parents=[], conflict_handler="resolve", add_help=False)
+STANDARD_PARSER.add_argument(*ArgOptions.log_level, type=ArgHelperActions.log_level, help="Log level", default=ArgOptions.log_level.default)
+STANDARD_PARSER.add_argument(*ArgOptions.output, type=ArgHelperActions.writeable_dir, help="Output directory", default=ArgOptions.output.default)
+STANDARD_PARSER.add_argument(*ArgOptions.results, type=ArgHelperActions.readable_dir, help="Results")
+STANDARD_PARSER.add_argument(*ArgOptions.version, help="Display version", action="store_true")  # store_true causes an arg to be readonly, no param needed
+
+
+def _parse_args(parser:ArgumentParser, ignore_unknown:bool=True) -> Namespace:
+    """
+    Attempts to parse args with the provided argparser
+    will show help on failure
+    by default will ignore unknown arguments
+
+    Args:
+        parser (ArgumentParser): the parser to use
+        ignore_unknown (bool, optional): Whether or not to skip over broken/unknown arguments. Defaults to True.
+
+    Raises:
+        parse_exception: Issue parsing args
+    
+    Returns:
+        Namespace: subscriptable wrapper around argparse namespace to get arg values
+    """
+    try:
+        parsed = parser.parse_args()
+        return Namespace(parsed)
+    except Exception as parse_exception:
+        exc_str = f"{parse_exception}"
+        print(exc_str)
+        if exc_str.startswith("unrecognized argument"):
+            broken_args = [arg for arg in exc_str.split(' ') if arg.startswith('-')]
+        else:
+            # not sure what we can do here yet
+            raise parse_exception
+        all_opts = []
+        for v in ArgOptions.values():
+            all_opts.extend([*v])
+        for broken in broken_args:
+            from difflib import get_close_matches
+            matches = get_close_matches(broken, all_opts)
+            if len(matches):
+                print(f"Instead of '{broken}', did you mean {matches}?")
+        parser.print_help()
+        if ignore_unknown:
+            parsed, _ = parser.parse_known_args()
+            return Namespace(parsed) # parses only args that are known, i.e. will ignore missing/broken args
+        else:
+            raise parse_exception
+    except SystemExit:
+        # inner = argparse.Namespace(**ArgOptions.items())
+        # return Namespace(inner)
+        import sys
+        sys.exit(1)
+
+
+def handle_base_args(args:Namespace):
+    """
+    Handles common/base/universal args
+
+    Args:
+        args (Namespace): args to handle
+    """
+    assert isinstance(args, Namespace), f"Need args to handle.Invalid object {type(args)} passed"
+    if args.version:
+        print("Version 0.1")
+
+
+def parse_and_handle_args(ignore_unknown:bool=True) -> Namespace:
+    """
+    Parses and handles args that were parsed if necessary
+
+    Args:
+        ignore_unknown (bool, optional): whether or not to ignore unknown arguments. Defaults to True.
+
+    Returns:
+        Namespace: the parsed args
+    """
+    args = _parse_args(STANDARD_PARSER, ignore_unknown=ignore_unknown)
+    handle_base_args(args)
+    return args
+
+
+#endregion
+
+
+#region HEALING
+
+
+def heal(args, log: Logger):
+    log.info("Results directory provided")
+    # parse cfg files
+    error_map = load_json_file_2_dict(Const.FileNames.ErrorMap)
+    action_map = load_json_file_2_dict(Const.FileNames.ActionMap)
+    results_map = load_json_file_2_dict(Const.FileNames.ResultMap)
+    actions = dict()  # contains actions and their run status
+    # load the syscheck results
+    syscheck_results = load_space_delimited_file(os.path.join(args.results, Const.FileNames.SysCheckResults), headers=["Test", "Result", "Time"])
     # determine which tasks need to be executed - mapping from errors to action
-    # execute tasks - ssh using the intervention library
-    # load results to output file
-    # report results - API
-    pass
+    for test, data in syscheck_results.items():
+        if "FAIL" in data["Result"]:
+            friendly_name = re.sub('[^a-z0-9_\- ]+', '', test)  # remove non-alphanumeric (spaces, dashes, and undescores allowed)
+            result_file_data = results_map.get(friendly_name)
+            assert result_file_data, f"Unable to get result file name for test {test} using friendly name {friendly_name}"
+            test_results = load_space_delimited_file(os.path.join(args.results, result_file_data["file"]), header_line=result_file_data["header"])
+            for host, results in test_results.items():
+                for res_name, res_val in results.items():
+                    if "FAIL" in res_val:
+                        action = error_map.get(friendly_name, {}).get(res_name)
+                        if not action:
+                            log.warning(f"Unable to find solutions for {res_name} test failure in {friendly_name} suite")
+                        else:
+                            intervention = action_map.get(action)
+                            assert intervention is not None, f"Unable to find fix for {res_name} test failure in {friendly_name} suite even though there's supposed to be one"
+                            actions.setdefault(host, {})
+                            actions[host].update({action: intervention})
+    log.info(f"Executing interventions for {len(actions)} hosts")
+    for host in actions:
+        # TODO: execute interventions via ssh
+        pass
+    json.dump(actions, os.path.join(args.output, Const.FileNames.HealingResults))
+    # TODO: report results - API
+
+
+#endregion
+
+if __name__ == "__main__":
+    log = get_log()
+    try:
+        log.info("Self-Healing initiated")
+        # parse input commands
+        log.debug("Parsing args")
+        args = parse_and_handle_args()
+        if ArgNames.results in args:
+            heal(result_dir=args.results, log=log)
+        else:
+            log.info("Results directory not provided")
+        log.info("Self-Healing is done")
+    except Exception as exc:
+        err_msg = f"Encountered error: {exc}"
+        import traceback
+        try:
+            log.info(err_msg)
+            log.debug(traceback.format_exc())
+        except:  # issue with logging is very bad
+            print(err_msg)
+            print(traceback.format_exc())
+        exit(1)
+    exit(0)
