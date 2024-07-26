@@ -1,0 +1,17 @@
+{
+    "AVERAGE LOAD": {"file": "load_result.log", "header": 2},
+    "CPU GOVERNOR": {"file": "cpugov_result.log", "header": 4},
+    "FILESYSTEM": {"file": "fs_result.log", "header": 2},
+    "GAUDI2": {"file": "gaudi_result.log", "header": 1},
+    "HCL (QUAL)": {"file": "hcl_result.log", "header": 0},
+    "HUGEPAGES": {"file": "hugepages_result.log", "header": 2},
+    "INTEL_IDLE": {"file": "intelidle_result.log", "header": 2},
+    "KERNEL MODS": {"file": "kmod_result.log", "header": 1},
+    "KERNEL VERSION": {"file": "kernel_result.log", "header": 2},
+    "MEMORY SIZE": {"file": "mem_result.log", "header": 3},
+    "NETWORK CARDS": {"file": "nic_result.log", "header": 1},
+    "NUMA CONFIG": {"file": "numa_result.log", "header": 2},
+    "PCIE RATE (QUAL)": {"file": "pcie_result.log", "header": 3},
+    "SCALEOUT_PORTS_UP": {"file": "port_result.log", "header": 0},
+    "SYNAPSE VERSION": {"file": "synapsever_result.log", "header": 0}
+}

@@ -1,0 +1,4 @@
+{
+    "action1": {"run": "python -c \"print('<input>')\"", "verify_output": "python -c \"3 in <output>\""},
+    "action2": {"run": "python -c \"with open('test.txt', 'w') as f: f.write('hello')\"", "verify": "python -c \"with open('test.txt', 'r') as f: assert f.readline() == 'hello'\""}
+}

@@ -1,0 +1,4 @@
+{
+    "FILESYSTEM": {"HOME_RESULT": {"action": "action1"}, "WEKA_RESULT": {"action": "action2"}},
+    "SYNAPSE VERSION": {"Result": {"action": "action1", "input": "Device"}}
+}
