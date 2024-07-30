@@ -6,9 +6,16 @@ class Directories:
     VirtualEnv = "env"  # folder for virtual environment data
 
 
+class ExitCodes:
+    Okay = 0
+    Err = 1
+    ErrNoLog = 2
+
+
 class FileNames:
     ActionMap = "action_map.json"  # the file containing the errnames:action mapping
     ErrorMap = "error_map.json"  # the file containing the syscheck errors:errnames mapping
+    InterventionData = "intervention_data.json"  # the file containing interventions to be applied
     HealingResults = "healing_results.json"  # the file containing results of the self-healing interventions
     SysCheckResults = "result.log"  # the file containing the high level syscheck result data
     ResultMap = "result_map.json"  # the file containing the test names:results mapping
@@ -62,3 +69,13 @@ class ResultDefinitions:
     ResultFileFail = "FAIL"
     TestFilePass = "PASSED"
     TestFileFail = "FAILED"
+
+
+class Strings:
+    NotStandalone = "This file is not meant to be run by itself, it should be imported"
+    Contact = "brit.thornwell@intel.com"
+    Version = "0.1"
+
+
+if __name__ == "__main__":
+    print(Strings.NotStandalone)

@@ -1,6 +1,8 @@
 import collections
 import logging
 from logging.handlers import RotatingFileHandler
+from pathlib import Path
+import shutil
 import sys
 from typing import Mapping, Tuple
 
@@ -179,6 +181,18 @@ def get_tail_logger(logger:Logger | logging.Logger, format=True, max_lines=100) 
     return buffer
 
 
+def dump_log_data_to_dir(logger:Logger, dir_name:str | Path):
+    """
+    Copies log files to the specified directory
+
+    Args:
+        logger (Logger): the logging object
+        dir_name (str | Path): the directory to store logs
+    """
+    shutil.copyfile(FileNames.LogName, dir_name)
+    shutil.copyfile(FileNames.ErrorLogName, dir_name)
+
+
 def get_log(logger:Logger | logging.Logger=None, log_name:str=FileNames.LogName, log_level:int | str=None, format:bool=True, get_tail=False, max_lines:int=100) -> Logger | Tuple[Logger, TailLogger]:
     """
     Gets the universal logging instance
@@ -223,3 +237,8 @@ def get_log(logger:Logger | logging.Logger=None, log_name:str=FileNames.LogName,
     else:
         tail = get_tail_logger(logger, format=format, max_lines=max_lines)
         return logger, tail
+
+
+if __name__ == "__main__":
+    from definitions import Strings
+    print(Strings.NotStandalone)

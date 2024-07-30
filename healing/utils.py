@@ -68,7 +68,7 @@ def import_module_from_path(mod_path:str | Path, relative=False) -> ModuleType:
         ModuleType: the actual imported module
     """
     import importlib.util
-    mod_path: Path = safe_path(mod_path)
+    mod_path: Path = safe_path(mod_path, relative=relative)
     if mod_path.suffix == ".py":
         mod_name = mod_path.stem
         if relative:
@@ -482,45 +482,41 @@ class ResourceManager:
 ResourceManager = ResourceManager()
 
 
-# class Schemas(dict):
-#     """
-#     Consolidates schema data
+class Schemas(dict):
+    """
+    Consolidates schema data
 
-#     builds an object capable of access via field access or dict item access regardless of extension
-#     the following examples all load the same schema
-#     Schemas.example_schema
-#     Schemas.example_schema.json
-#     Schemas["example_schema"]
-#     Schemas["example_schema.json"]
-#     """
-#     def __init__(self):
-#         log = get_log()
-#         self.all_schemas = []
-#         schema_path = safe_path(os.path.join(get_project_root(), Const.Directories.Schemas))
-#         schema_paths = [schema_path]
-#         project_path = safe_path(os.path.join(get_project_root(), Const.Directories.Schemas))
-#         if os.path.exists(project_path):
-#             schema_paths.append(project_path)
-#         for path in schema_paths:
-#             for file in path.iterdir():
-#                 if file.name.endswith(".py"):
-#                     schema = import_module_from_path(file).schema
-#                 elif file.name.endswith(".json"):
-#                     with open(file, 'r') as schema:
-#                         schema = json.loads(schema.read())
-#                 else:
-#                     if "__pycache__" not in f"{file}":
-#                         log.warn(f"Skipping non-functional file in schema dir: '{file}'")
-#                 jsonschema.Draft202012Validator.check_schema(schema)
-#                 schema_file = os.path.basename(file.name)
-#                 self[schema_file] = schema
-#                 no_ext = os.path.splitext(schema_file)[0]
-#                 self[no_ext] = schema
-#                 self.__setattr__(no_ext, schema)
-#                 self.all_schemas.append(no_ext)
+    builds an object capable of access via field access or dict item access regardless of extension
+    the following examples all load the same schema
+    Schemas.example_schema
+    Schemas.example_schema.json
+    Schemas["example_schema"]
+    Schemas["example_schema.json"]
+    """
+    def __init__(self):
+        self.all_schemas = []
+        schema_path = safe_path(os.path.join(get_project_root(), Directories.Schemas), relative=False)
+        schema_paths = [schema_path]
+        for path in schema_paths:
+            for file in path.iterdir():
+                if file.name.endswith(".py") and not "__init__" in file.name:
+                    schema = import_module_from_path(file, relative=False).schema
+                elif file.name.endswith(".json"):
+                    with open(file, 'r') as schema:
+                        schema = json.loads(schema.read())
+                else:
+                    # print(f"Skipping non-functional file in schema dir: '{file}'")
+                    continue
+                jsonschema.Draft202012Validator.check_schema(schema)
+                schema_file = os.path.basename(file.name)
+                self[schema_file] = schema
+                no_ext = os.path.splitext(schema_file)[0]
+                self[no_ext] = schema
+                self.__setattr__(no_ext, schema)
+                self.all_schemas.append(no_ext)
 
 
-# Schemas = Schemas()
+Schemas = Schemas()
 
 
 def sanitize(data:str, regex_string=RegexStrings.AlphaNumeric, double_dash_exempt:bool=False) -> bool:
@@ -724,3 +720,8 @@ def load_space_delimited_file(to_load: str | Path, headers=None, header_line=0, 
             name += f"_{str(hash(str(row_data)))[-4:]}"
         table[name.strip()] = {k: re.sub(RegexStrings.FriendlyName, '', v).strip() for k, v in zip(headers, row_data)}
     return table if sanitize_dict(table) else {}  # TODO: validate schema if one is available
+
+
+if __name__ == "__main__":
+    from definitions import Strings
+    print(Strings.NotStandalone)

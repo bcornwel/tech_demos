@@ -5,6 +5,7 @@ import sys
 from typing import Any, Sequence, Tuple
 
 
+from definitions import ExitCodes, Strings
 from log_utils import get_log
 from utils import get_current_time_string_path_friendly, safe_path, str_to_log_level
 
@@ -14,6 +15,7 @@ class ArgNames:
     Collection of arg names to be used by ArgOptions
     e.g. ArgOptions[ArgNames.config]
     """
+    help = "help"
     log_level = "log_level"
     output = "output"  # output directory
     results = "results"  # syscheck results
@@ -69,6 +71,7 @@ class ArgOptions(dict):
     """
     def __init__(self):
         options = [
+            ArgOption(ArgNames.help, 'h'),
             ArgOption(ArgNames.log_level, 'l', "log", default=logging.INFO),
             ArgOption(ArgNames.output, 'o', "output_dir", default=get_current_time_string_path_friendly()),
             ArgOption(ArgNames.results, 'r'),
@@ -228,8 +231,8 @@ class ArgumentParser(argparse.ArgumentParser):
                     file_name = e_info.f_code.co_filename
                     line = e_info.f_lineno
                 except:
-                    raise Exception(f"It appears you entered <parser>.add_argument(ArgOptions.<option> but you need to unpack the ArgOption e.g. *ArgOptions.<option> instead of ArgOptions.<option>") from type_exception
-                raise Exception(f"It appears you entered <parser>.add_argument(ArgOptions.<option> on line {line} of {os.path.relpath(file_name)} but you need to unpack the ArgOption e.g. *ArgOptions.<option> instead of ArgOptions.<option>") from type_exception
+                    raise Exception(f"It appears you entered parser.add_argument(ArgOptions.<option> but you need to unpack the ArgOption e.g. *ArgOptions.<option> instead of ArgOptions.<option>") from type_exception
+                raise Exception(f"It appears you entered parser.add_argument(ArgOptions.<option> on line {line} of {os.path.relpath(file_name)} but you need to unpack the ArgOption e.g. *ArgOptions.<option> instead of ArgOptions.<option>") from type_exception
             else:
                 raise type_exception
 
@@ -356,8 +359,9 @@ class ArgHelperActions:
         else:
             raise argparse.ArgumentTypeError(f"Directory '{f}' is not a valid readable path")
 
- 
-STANDARD_PARSER = ArgumentParser(description="Self-Healing arguments", parents=[], conflict_handler="resolve", add_help=False)
+
+STANDARD_PARSER = ArgumentParser(description="Self-Healing", parents=[], conflict_handler="resolve", add_help=False)
+STANDARD_PARSER.add_argument(*ArgOptions.help, help="Help", action="store_true")  # store_true causes an arg to be readonly, no param needed
 STANDARD_PARSER.add_argument(*ArgOptions.log_level, type=ArgHelperActions.log_level, help="Log level", default=ArgOptions.log_level.default)
 STANDARD_PARSER.add_argument(*ArgOptions.output, type=ArgHelperActions.writeable_dir, help="Output directory", default=ArgOptions.output.default)
 STANDARD_PARSER.add_argument(*ArgOptions.results, type=ArgHelperActions.readable_dir, help="Results")
@@ -419,9 +423,12 @@ def handle_base_args(args:Namespace):
     Args:
         args (Namespace): args to handle
     """
-    assert isinstance(args, Namespace), f"Need args to handle.Invalid object {type(args)} passed"
+    assert isinstance(args, Namespace), f"Need args to handle. Invalid object {type(args)} passed"
     if args.version:
-        print("Version 0.1")
+        print(Strings.Version)
+    if args.help:
+        STANDARD_PARSER.epilog = "Contact brit.thornwell@intel.com for more help with this tool"
+        STANDARD_PARSER.print_help()
 
 
 def parse_and_handle_args(ignore_unknown:bool=True) -> Namespace:
@@ -437,3 +444,8 @@ def parse_and_handle_args(ignore_unknown:bool=True) -> Namespace:
     args = _parse_args(STANDARD_PARSER, ignore_unknown=ignore_unknown)
     handle_base_args(args)
     return args
+
+
+if __name__ == "__main__":
+    from definitions import Strings
+    print(Strings.NotStandalone)
