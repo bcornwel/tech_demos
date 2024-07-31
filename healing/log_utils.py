@@ -1,6 +1,7 @@
 import collections
 import logging
 from logging.handlers import RotatingFileHandler
+import os
 from pathlib import Path
 import shutil
 import sys
@@ -8,7 +9,7 @@ from typing import Mapping, Tuple
 
 
 from definitions import FileNames
-from utils import get_caller_name, ResourceManager
+from utils import get_caller_name, get_project_root, ResourceManager
 
 
 def GetLogFormatter(standard=True) -> logging.Formatter:
@@ -49,9 +50,9 @@ class Logger():
     def __init__(self, logger_instance):
         self.instance: logging.Logger = logger_instance
         self.handlers = self.instance.handlers
-        self.error_log = logging.getLogger(FileNames.ErrorLogName)
+        self.error_log = logging.getLogger(f"{Path(get_project_root(), FileNames.ErrorLogName)}")
         if not len(self.error_log.handlers):  # not already set up
-            file_handler = logging.FileHandler(FileNames.ErrorLogName)
+            file_handler = logging.FileHandler(f"{Path(get_project_root(), FileNames.ErrorLogName)}")
             file_handler.setLevel(logging.INFO)
             file_handler.setFormatter(GetLogFormatter(standard=False))
             self.error_log.addHandler(file_handler)
@@ -189,11 +190,12 @@ def dump_log_data_to_dir(logger:Logger, dir_name:str | Path):
         logger (Logger): the logging object
         dir_name (str | Path): the directory to store logs
     """
-    shutil.copyfile(FileNames.LogName, dir_name)
-    shutil.copyfile(FileNames.ErrorLogName, dir_name)
+    os.makedirs(dir_name, mode=777, exist_ok=True)
+    shutil.copy(Path(get_project_root(), FileNames.LogName), dir_name)  # for some reason this is complaining permission is denied
+    shutil.copy(Path(get_project_root(), FileNames.ErrorLogName), dir_name)
 
 
-def get_log(logger:Logger | logging.Logger=None, log_name:str=FileNames.LogName, log_level:int | str=None, format:bool=True, get_tail=False, max_lines:int=100) -> Logger | Tuple[Logger, TailLogger]:
+def get_log(logger:Logger | logging.Logger=None, log_name:str=f"{Path(get_project_root(), FileNames.LogName)}", log_level:int | str=None, format:bool=True, get_tail=False, max_lines:int=100) -> Logger | Tuple[Logger, TailLogger]:
     """
     Gets the universal logging instance
 
@@ -210,6 +212,14 @@ def get_log(logger:Logger | logging.Logger=None, log_name:str=FileNames.LogName,
     Returns:
         Logger or Tuple[Logger, TailLogger]: the logger and optionally the log buffer
     """
+    try:
+        os.remove(log_name)  # clear the healing.log file just in case
+    except:
+        pass
+    try:
+        os.remove(f"{Path(get_project_root(), FileNames.ErrorLogName)}")  # clear the errors.log file just in case
+    except:
+        pass
     logger = Logger(logger if logger else logging.getLogger(log_name))
     # if not len(logger.handlers):  # not already set up
     #     file_handler = logging.FileHandler(log_name)

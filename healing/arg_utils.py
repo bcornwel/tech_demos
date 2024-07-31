@@ -1,13 +1,14 @@
 import argparse
 import logging
 import os
+from pathlib import Path
 import sys
 from typing import Any, Sequence, Tuple
 
 
-from definitions import ExitCodes, Strings
+from definitions import Directories, ExitCodes, Strings
 from log_utils import get_log
-from utils import get_current_time_string_path_friendly, safe_path, str_to_log_level
+from utils import get_current_time_string_path_friendly, get_project_root, safe_path, str_to_log_level
 
 
 class ArgNames:
@@ -73,7 +74,7 @@ class ArgOptions(dict):
         options = [
             ArgOption(ArgNames.help, 'h'),
             ArgOption(ArgNames.log_level, 'l', "log", default=logging.INFO),
-            ArgOption(ArgNames.output, 'o', "output_dir", default=get_current_time_string_path_friendly()),
+            ArgOption(ArgNames.output, 'o', "output_dir", default=Path(get_project_root(), Directories.Results, get_current_time_string_path_friendly())),
             ArgOption(ArgNames.results, 'r'),
             ArgOption(ArgNames.syscheck, 's', default=True),
             ArgOption(ArgNames.test_mode, default=False),

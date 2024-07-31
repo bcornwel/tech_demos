@@ -1,0 +1,17 @@
+{
+    "AVERAGE LOAD": {"file": "load_result.log", "header": 2, "schema": "load.py"},
+    "CPU GOVERNOR": {"file": "cpugov_result.log", "header": 4, "schema": "cpugov.py"},
+    "FILESYSTEM": {"file": "fs_result.log", "header": 2, "schema": "fs.py"},
+    "GAUDI2": {"file": "gaudi_result.log", "header": 1, "schema": "gaudi.py"},
+    "HCL (QUAL)": {"file": "hcl_result.log", "header": 0, "schema": "hcl.py"},
+    "HUGEPAGES": {"file": "hugepages_result.log", "header": 2, "schema": "hugepages.py"},
+    "INTEL_IDLE": {"file": "intelidle_result.log", "header": 2, "schema": "intelidle.py"},
+    "KERNEL MODS": {"file": "kmod_result.log", "header": 1, "schema": "kmod.py"},
+    "KERNEL VERSION": {"file": "kernel_result.log", "header": 2, "schema": "kernel.py"},
+    "MEMORY SIZE": {"file": "mem_result.log", "header": 3, "schema": "mem.py"},
+    "NETWORK CARDS": {"file": "nic_result.log", "header": 1, "schema": "nic.py"},
+    "NUMA CONFIG": {"file": "numa_result.log", "header": 2, "schema": "numa.py"},
+    "PCIE RATE (QUAL)": {"file": "pcie_result.log", "header": 3, "schema": "pcie.py"},
+    "SCALEOUT_PORTS_UP": {"file": "port_result.log", "header": 0, "schema": "port.py"},
+    "SYNAPSE VERSION": {"file": "synapsever_result.log", "header": 0, "schema": "synapsever.py"}
+}

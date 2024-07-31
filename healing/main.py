@@ -5,6 +5,7 @@ from subprocess import check_output
 from arg_utils import *
 from definitions import *
 from log_utils import *
+from schema_utils import Schemas, validate_schema
 from utils import *
 
 
@@ -24,18 +25,20 @@ def determine_healing(results_dir: str | Path, log: Logger) -> dict:
     """
     log.info(f"Results directory provided: {results_dir}")
     # parse cfg files
-    error_map = load_json_file_2_dict(os.path.join(get_project_root(), FileNames.ErrorMap))
-    action_map = load_json_file_2_dict(os.path.join(get_project_root(), FileNames.ActionMap))
-    results_map = load_json_file_2_dict(os.path.join(get_project_root(), FileNames.ResultMap))
+    project_root = get_project_root()
+    error_map = load_json_file_2_dict(Path(project_root, Directories.Configs, FileNames.ErrorMap))
+    action_map = load_json_file_2_dict(Path(project_root, Directories.Configs, FileNames.ActionMap))
+    results_map = load_json_file_2_dict(Path(project_root, Directories.Configs, FileNames.ResultMap))
     actions = dict()  # contains actions and their run status
     # load the syscheck results
-    syscheck_results = load_space_delimited_file(os.path.join(results_dir, FileNames.SysCheckResults), headers=[KeyNames.Test, KeyNames.Result])
+    syscheck_results = validate_schema(load_space_delimited_file(Path(results_dir, FileNames.SysCheckResults), headers=[KeyNames.Test, KeyNames.Result]), schema=Schemas[FileNames.SysCheckSchema])
     # determine which tasks need to be executed - mapping from errors to action
     for test, data in syscheck_results.items():
         if ResultDefinitions.ResultFileFail == data[KeyNames.Result]:
             result_file_data = results_map.get(data[KeyNames.Test])
             assert result_file_data, f"Unable to get result file name for test {test}"
-            test_results = load_space_delimited_file(os.path.join(results_dir, result_file_data[KeyNames.File]), header_line=result_file_data[KeyNames.Header], use_hashes=True)
+            log.info(f"Loading results for test: {test}")
+            test_results = validate_schema(load_space_delimited_file(Path(results_dir, result_file_data[KeyNames.File]), header_line=result_file_data[KeyNames.Header], use_hashes=True), schema=Schemas[result_file_data[KeyNames.Schema]])
             for host_id, results in test_results.items():
                 for res_name, res_val in results.items():
                     if ResultDefinitions.TestFileFail == res_val:
@@ -96,7 +99,8 @@ def rerun_syscheck(all:bool=True):
     # e.g. devops.syscheck/devtest/results/result_syscheck_2024-05-06_1405
     # TODO: determine how to get to devops.syscheck path and verify devtest or other cluster name
     # should be parallel to this directory probably
-    output = check_output("./syscheck")
+    # output = check_output("./syscheck")
+    pass
 
 
 def heal(args: Namespace, log: Logger):
@@ -111,34 +115,34 @@ def heal(args: Namespace, log: Logger):
         args (Namespace): the arg structure containing which args were called and their parameters
         log (Logger): the logging object
     """
-    log.debug("Determining what needs to be healed")
+    log.info("Determining what needs to be healed")
     host_data = determine_healing(args.results, log=log)
 
-    log.debug("Saving intervention data")
+    log.info("Saving intervention data")
     # TODO: better data saving mechanism
-    output_file = os.path.join(args.output, FileNames.InterventionData)
+    output_file = Path(args.output, FileNames.InterventionData)
     os.makedirs(args.output, mode=777, exist_ok=True)
     with open(output_file, 'w') as res_file:
         json.dump(host_data, res_file)
 
-    log.debug("Executing interventions")
+    log.info("Executing interventions")
     results = execute_interventions(host_data)
 
-    log.debug("Rerunning syscheck to determine if interventions solved the problem(s)")
+    log.info("Rerunning syscheck to determine if interventions solved the problem(s)")
     rerun_syscheck()
-    log.debug("Determining if more problems need to be healed")
+    log.info("Determining if more problems need to be healed")
     new_host_data = determine_healing(args.results, log=log)
     if new_host_data:
         new_results = execute_interventions(new_host_data)
 
-    log.debug("Saving intervention results")
+    log.info("Saving intervention results")
     # TODO: better data saving mechanism
-    output_file = os.path.join(args.output, FileNames.HealingResults)
+    output_file = Path(args.output, FileNames.HealingResults)
     os.makedirs(args.output, mode=777, exist_ok=True)
     with open(output_file, 'w') as res_file:
         json.dump(new_results if new_results else results, res_file)
     
-    log.debug("Reporting results")
+    log.info("Reporting results")
     report(host_data)
 
 

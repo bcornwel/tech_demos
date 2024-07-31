@@ -1,6 +1,7 @@
 class Directories:
     Configs = "configs"  # where config files are generally stored
     Docs = "docs"  # where documentation is stored
+    Results = "results"  # where healing results are stored
     Schemas = "schemas"  # where schemas are stored
     Test = "_test"  # where test files are stored
     VirtualEnv = "env"  # folder for virtual environment data
@@ -18,6 +19,7 @@ class FileNames:
     InterventionData = "intervention_data.json"  # the file containing interventions to be applied
     HealingResults = "healing_results.json"  # the file containing results of the self-healing interventions
     SysCheckResults = "result.log"  # the file containing the high level syscheck result data
+    SysCheckSchema = "syscheck.py"  # the schema file for the syscheck results result.log file
     ResultMap = "result_map.json"  # the file containing the test names:results mapping
     LogName = "healing.log"
     ErrorLogName = "errors.log"
@@ -30,6 +32,7 @@ class KeyNames:
     Input = "input"
     Output = "output"
     Result = "Result"
+    Schema = "schema"
     Test = "Test"
 
 
@@ -51,7 +54,8 @@ class RegexStrings:
     BlockDrop = r"(?i)Drop (index|constraint|table|column|primary|foreign|check|database|view)"
     BlockSqlComment = r"--"
     Directory = r"([a-zA-Z]:\\\\)|(\/|\\|\\\\){0,1}(\w+(\/|\\|\\\\))*\w+(\/|\\|\\\\)*"
-    FriendlyName = r"[^a-zA-Z0-9_\- ]+"  # non-friendly name characters
+    FriendlyName = r"[^a-zA-Z0-9_\-\(\)\. ]+"  # non-friendly name characters
+    Hashed_Host = r"[a-zA-Z\.0-9]+_[0-9]{4}"
     Numeric = r"(0-9)+\.*(0-9)+"
     PathLike = r"((?:[^;]*/)*)(.*)"
     PathTraversal = r"(/|\\|\\\\)\.\.(/|\\|\\\\)"
@@ -60,7 +64,7 @@ class RegexStrings:
     Tuple = r"[a-zA-Z0-9_\(\)\,]"
     Url = r"http(s){0,1}:\/\/(((([0-1]*[0-9]*[0-9]\.|2[0-5][0-5]\.){3})([0-1]*[0-9]*[0-9]|2[0-5][0-5])(:[0-9]{0,4}|[0-5][0-9]{4}|6[0-5][0-5][0-3][0-5])*)|((\d*[a-zA-Z][a-zA-Z0-9\.]*(\-*))+\.[a-zA-Z0-9]{1,3}))((/[\w\-\.]*)*(\?\w+=\w+)*)*"
     MarkdownLink = r"\[.*\]\(.*\)"
-    Variable = r"[\w\. ]+"
+    Variable = r"[\w_\. ]+"
     AnsiEscapes = r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])"
 
 

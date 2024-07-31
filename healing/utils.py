@@ -17,6 +17,10 @@ from typing import Callable
 from definitions import *
 
 
+_proj_root = None
+_proj_root_str = None
+
+
 def get_project_root(as_str=False) -> Path:
     """
     returns the root of the project by getting this file (located in root/) and then going one directory up
@@ -27,8 +31,13 @@ def get_project_root(as_str=False) -> Path:
     Returns:
         Path: the path to the root of the project
     """
-    root = os.path.dirname(os.path.abspath(__file__))
-    return root if as_str else Path(root).resolve()
+    global _proj_root
+    global _proj_root_str
+    if not _proj_root:
+        root = os.path.dirname(os.path.abspath(__file__))
+        _proj_root = Path(root).resolve()
+        _proj_root_str = root
+    return _proj_root_str if as_str else _proj_root
 
 
 def safe_path(path: str | Path, relative:bool=True) -> Path:
@@ -296,7 +305,7 @@ def str_to_log_level(s_lvl:str) -> int:
         return logging._nameToLevel[s_lvl]
     except Exception as conversion_exception:
         msg = f"Unable to find log level from name '{s_lvl}'"
-        logging.getLogger(FileNames.LogName).error(msg, stack_info=True)
+        logging.getLogger(f"{Path(get_project_root(), FileNames.LogName)}").error(msg, stack_info=True)
         raise Exception(msg)
 
 
@@ -482,43 +491,6 @@ class ResourceManager:
 ResourceManager = ResourceManager()
 
 
-class Schemas(dict):
-    """
-    Consolidates schema data
-
-    builds an object capable of access via field access or dict item access regardless of extension
-    the following examples all load the same schema
-    Schemas.example_schema
-    Schemas.example_schema.json
-    Schemas["example_schema"]
-    Schemas["example_schema.json"]
-    """
-    def __init__(self):
-        self.all_schemas = []
-        schema_path = safe_path(os.path.join(get_project_root(), Directories.Schemas), relative=False)
-        schema_paths = [schema_path]
-        for path in schema_paths:
-            for file in path.iterdir():
-                if file.name.endswith(".py") and not "__init__" in file.name:
-                    schema = import_module_from_path(file, relative=False).schema
-                elif file.name.endswith(".json"):
-                    with open(file, 'r') as schema:
-                        schema = json.loads(schema.read())
-                else:
-                    # print(f"Skipping non-functional file in schema dir: '{file}'")
-                    continue
-                jsonschema.Draft202012Validator.check_schema(schema)
-                schema_file = os.path.basename(file.name)
-                self[schema_file] = schema
-                no_ext = os.path.splitext(schema_file)[0]
-                self[no_ext] = schema
-                self.__setattr__(no_ext, schema)
-                self.all_schemas.append(no_ext)
-
-
-Schemas = Schemas()
-
-
 def sanitize(data:str, regex_string=RegexStrings.AlphaNumeric, double_dash_exempt:bool=False) -> bool:
     """
     Determines if a string is sanitary
@@ -566,40 +538,6 @@ def sanitize_dict(instance: dict | bool | list | str) -> bool:
                 raise jsonschema.ValidationError(f"Value {sub_instance} is not sanitary!")
         return True
     return sub_sanitize(instance)
-
-
-def custom_schema_validation(instance: dict | bool, schema: dict) -> None:
-    """
-    Wraps the jsonschma's validate function with some better error handling, especially useful in the case of custom error messages
-
-    Args:
-        instance (dict or bool): a json-like object to validate, generally a dict
-        schema (dict): the schema to use to validate the instance
-
-    Raises:
-        SchemaValidationError: error validating the schema
-    """
-    try:
-        jsonschema.validate(instance, schema)
-    except Exception as validation_exception:
-        err = f"{validation_exception}"
-        instance_str = f"{instance}"
-        if len(instance_str) > 32:  # need to shrink this down
-            instance_str = f"{instance_str[:32]}..."
-        if "error message" in err:
-            err_start = err.find("error message")+15
-            err = err[err_start:]
-            err_end = err.find("\n", err_start)
-            err = err[:err_end]
-            pattern_str = ""
-            if "'pattern'" in err:
-                pattern_start = err.find("'pattern'")
-                pattern = err[pattern_start+11:].strip()
-                err = err[:pattern_start].strip()
-                pattern_str = f"\nUse regex pattern: {pattern}"
-            raise jsonschema.ValidationError(f"Error validating {instance_str} because {err}{pattern_str}")
-        else:
-            raise jsonschema.ValidationError(f"Error validating {instance_str}\n{err}")
 
 
 def add_default_values_to_missing_keys(data: dict, schema: dict, key: str="") -> dict:
@@ -719,7 +657,7 @@ def load_space_delimited_file(to_load: str | Path, headers=None, header_line=0, 
         if use_hashes:
             name += f"_{str(hash(str(row_data)))[-4:]}"
         table[name.strip()] = {k: re.sub(RegexStrings.FriendlyName, '', v).strip() for k, v in zip(headers, row_data)}
-    return table if sanitize_dict(table) else {}  # TODO: validate schema if one is available
+    return table if sanitize_dict(table) else {}
 
 
 if __name__ == "__main__":
