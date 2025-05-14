@@ -1,0 +1,20 @@
+FROM vault.habana.ai/gaudi-docker/1.16.2/ubuntu22.04/habanalabs/pytorch-installer-2.2.2:latest AS habana-base
+
+# Labeling and information
+LABEL xa_scale.maintainer.email="pse_svce_content@intel.com"
+LABEL xa_scale.maintainer.name="PSE SVCE Content"
+
+# Set environment variables
+RUN export http_proxy=http://proxy-us.intel.com:911 \
+&& export https_proxy=http://proxy-us.intel.com:912 \
+&& export no_proxy=127.0.0.0/8,localhost,10.0.0.0/8,192.168.0.0/16,192.168.14.0/16,192.168.14.1,192.168.14.2,192.168.14.3,192.168.14.4,192.168.14.5,192.168.14.6,192.168.14.7,192.168.14.8,192.168.14.24,192.168.14.101,192.168.14.102,192.168.14.103,192.168.14.104,192.168.14.105,192.168.14.106,192.168.14.107,192.168.14.108,192.168.14.124,.intel.com \
+&& export no_proxy=127.0.0.0/8,localhost,10.0.0.0/8,192.168.0.0/16,.intel.com
+
+# Install dependencies
+
+# Setup folder structure
+RUN mkdir -p /content
+COPY xa-scale/ /content 
+WORKDIR /content
+
+CMD ["python -m xa-scale"]
